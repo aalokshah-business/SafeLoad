@@ -8,7 +8,6 @@ import os
 from pathlib import Path
 import re
 import stat
-import tempfile
 import threading
 import zipfile
 from dataclasses import asdict, dataclass, field
@@ -48,15 +47,12 @@ class FileResult:
     path: str
     status: str
     found: list[Hit]
-    remaining: list[Hit]
     issues: list[str]
-    changed: bool = False
 
 
 @dataclass
 class Report:
     source: str
-    output: str | None
     started: str
     files: list[FileResult] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
@@ -65,7 +61,7 @@ class Report:
     @property
     def safe(self):
         return bool(self.files) and not self.cancelled and not self.issues and all(
-            f.status == 'CLEAN' for f in self.files)
+            f.status == 'OK' for f in self.files)
 
     def save(self, path: Path):
         body = asdict(self)
@@ -107,18 +103,6 @@ class Keywords:
             counts[index] = counts.get(index, 0) + 1
         inspection.hits.extend(Hit(i, location, n) for i, n in counts.items())
 
-    def remove(self, text):
-        # Iterate: deleting a keyword can join two fragments into another keyword.
-        while True:
-            spans = [(a, b) for _, a, b in self.ranges(text)]
-            if not spans:
-                return text
-            keep = bytearray(b'\x01') * len(text)
-            for a, b in spans:
-                keep[a:b] = b'\x00' * (b-a)
-            text = ''.join(c for c, k in zip(text, keep) if k)
-
-
 def decode_text(data):
     for bom, encoding in [(codecs.BOM_UTF32_LE, 'utf-32'),
                           (codecs.BOM_UTF32_BE, 'utf-32'),
@@ -133,9 +117,8 @@ def decode_text(data):
     return value, 'utf-8'
 
 
-def office(data, suffix, keys, edit):
+def office(data, suffix, keys):
     result = Inspection()
-    destination = io.BytesIO()
     with zipfile.ZipFile(io.BytesIO(data)) as package:
         entries = package.infolist()
         if len(entries) > 10000 or sum(e.file_size for e in entries) > MAX_PACKAGE:
@@ -143,74 +126,56 @@ def office(data, suffix, keys, edit):
         names = [e.filename for e in entries]
         if len(names) != len(set(names)) or OFFICE[suffix] not in names:
             raise ValueError('Invalid or ambiguous Office package.')
-        with zipfile.ZipFile(destination, 'w', zipfile.ZIP_DEFLATED) as output:
-            keys.inspect(package.comment.decode('utf-8', errors='replace'), 'ZIP comment', result)
-            if package.comment:
-                result.issues.append('ZIP comment requires manual review.')
-            for entry in entries:
-                keys.inspect(entry.filename, 'Package part name: ' + entry.filename, result)
-                if entry.flag_bits & 1:
-                    raise ValueError('Encrypted package entry cannot be inspected.')
-                content = package.read(entry)
-                name = entry.filename
-                if entry.extra or entry.comment:
-                    result.issues.append('ZIP extra data/comment requires review: ' + name)
-                if name.endswith(('.xml', '.rels')):
-                    parser = etree.XMLParser(resolve_entities=False, no_network=True,
-                                             remove_blank_text=False, strip_cdata=False)
-                    tree = etree.fromstring(content, parser)
-                    if tree.getroottree().docinfo.doctype:
-                        raise ValueError('XML document type declarations are not supported.')
-                    nodes = list(tree.iter())
-                    # Paragraphs and spreadsheet strings: detect terms split across runs.
-                    groups, used = [], set()
-                    for node in nodes:
-                        if not isinstance(node.tag, str):
-                            continue
-                        local = etree.QName(node).localname
-                        if local in {'p', 'si', 'is'}:
-                            texts = [n for n in node.iter() if isinstance(n.tag, str)
-                                     and etree.QName(n).localname == 't' and n.text is not None
-                                     and n not in used]
-                            if texts:
-                                groups.append(texts)
-                                used.update(texts)
-                    groups.extend([n] for n in nodes if n not in used and n.text)
-                    for number, group in enumerate(groups, 1):
-                        text = ''.join(n.text or '' for n in group)
-                        location = f'{name}: text group {number}'
-                        keys.inspect(text, location, result)
-                        if edit:
-                            # Keep each surviving character in its original formatting run.
-                            while True:
-                                joined = ''.join(n.text or '' for n in group)
-                                ranges = [(a, b) for _, a, b in keys.ranges(joined)]
-                                if not ranges:
-                                    break
-                                offset = 0
-                                for node in group:
-                                    old = node.text or ''
-                                    node.text = ''.join(c for j, c in enumerate(old, offset)
-                                                        if not any(a <= j < b for a, b in ranges))
-                                    offset += len(old)
-                    for node in nodes:
-                        for attr, value in node.attrib.items():
-                            keys.inspect(value, f'{name}: attribute {attr}', result)
-                        if node.tail:
-                            keys.inspect(node.tail, f'{name}: XML tail', result)
-                        if isinstance(node.tag, str) and etree.QName(node).localname == 'Relationship':
-                            if node.get('TargetMode') == 'External':
-                                result.issues.append('External relationship requires review: ' + name)
-                    if edit:
-                        content = etree.tostring(tree, xml_declaration=True, encoding='UTF-8')
-                elif content and not entry.is_dir():
-                    result.issues.append('Uninspected media, macro, or embedded part: ' + name)
-                output.writestr(entry, content)
-            output.comment = package.comment
-    return destination.getvalue() if edit else data, result
+        keys.inspect(package.comment.decode('utf-8', errors='replace'), 'ZIP comment', result)
+        if package.comment:
+            result.issues.append('ZIP comment requires manual review.')
+        for entry in entries:
+            keys.inspect(entry.filename, 'Package part name: ' + entry.filename, result)
+            if entry.flag_bits & 1:
+                raise ValueError('Encrypted package entry cannot be inspected.')
+            content = package.read(entry)
+            name = entry.filename
+            if entry.extra or entry.comment:
+                result.issues.append('ZIP extra data/comment requires review: ' + name)
+            if name.endswith(('.xml', '.rels')):
+                parser = etree.XMLParser(resolve_entities=False, no_network=True,
+                                         remove_blank_text=False, strip_cdata=False)
+                tree = etree.fromstring(content, parser)
+                if tree.getroottree().docinfo.doctype:
+                    raise ValueError('XML document type declarations are not supported.')
+                nodes = list(tree.iter())
+                # Paragraphs and spreadsheet strings: detect terms split across runs.
+                groups, used = [], set()
+                for node in nodes:
+                    if not isinstance(node.tag, str):
+                        continue
+                    local = etree.QName(node).localname
+                    if local in {'p', 'si', 'is'}:
+                        texts = [n for n in node.iter() if isinstance(n.tag, str)
+                                 and etree.QName(n).localname == 't' and n.text is not None
+                                 and n not in used]
+                        if texts:
+                            groups.append(texts)
+                            used.update(texts)
+                groups.extend([n] for n in nodes if n not in used and n.text)
+                for number, group in enumerate(groups, 1):
+                    text = ''.join(n.text or '' for n in group)
+                    location = f'{name}: text group {number}'
+                    keys.inspect(text, location, result)
+                for node in nodes:
+                    for attr, value in node.attrib.items():
+                        keys.inspect(value, f'{name}: attribute {attr}', result)
+                    if node.tail:
+                        keys.inspect(node.tail, f'{name}: XML tail', result)
+                    if isinstance(node.tag, str) and etree.QName(node).localname == 'Relationship':
+                        if node.get('TargetMode') == 'External':
+                            result.issues.append('External relationship requires review: ' + name)
+            elif content and not entry.is_dir():
+                result.issues.append('Uninspected media, macro, or embedded part: ' + name)
+    return result
 
 
-def pdf(data, keys, edit):
+def pdf(data, keys):
     result = Inspection()
     with pymupdf.open(stream=data, filetype='pdf') as doc:
         if doc.needs_pass:
@@ -230,36 +195,25 @@ def pdf(data, keys, edit):
                     keys.inspect(str(value), f'Page {page.number + 1}: annotation {name}', result)
             for widget in page.widgets() or []:
                 keys.inspect(str(widget.field_value), f'Page {page.number + 1}: form field', result)
-            if edit:
-                for word in keys.words:
-                    for quad in page.search_for(word, quads=True):
-                        page.add_redact_annot(quad, fill=(1, 1, 1), cross_out=False)
-                page.apply_redactions(images=0, graphics=0)
-        if edit:
-            doc.set_metadata({k: keys.remove(v) if isinstance(v, str) else v
-                              for k, v in doc.metadata.items()})
-            doc.del_xml_metadata()
-            return doc.tobytes(garbage=4, deflate=True, clean=True), result
-    return data, result
+    return result
 
 
-def inspect_file(data, path, keys, edit=False):
+def inspect_file(data, path, keys):
     suffix = path.suffix.lower()
     if len(data) > MAX_FILE:
         raise ValueError('File exceeds 100 MiB inspection limit.')
     if data.startswith(b'%PDF-') or suffix == '.pdf':
-        return pdf(data, keys, edit)
+        return pdf(data, keys)
     if suffix in OFFICE:
-        return office(data, suffix, keys, edit)
+        return office(data, suffix, keys)
     if suffix not in TEXT_EXTENSIONS and path.name.lower() not in TEXT_EXTENSIONS and suffix:
         raise ValueError('Unsupported file type; manual review required.')
-    text, encoding = decode_text(data)
+    text, _ = decode_text(data)
     result = Inspection()
     # Scan the entire string so multi-line keywords are not missed.
     for index, a, _ in keys.ranges(text):
         result.hits.append(Hit(index, f'Line {text.count(chr(10), 0, a) + 1}', 1))
-    cleaned = keys.remove(text) if edit else text
-    return cleaned.encode(encoding) if edit else data, result
+    return result
 
 
 def is_link(path):
@@ -307,35 +261,16 @@ def alternate_streams(path):
     return found
 
 
-def atomic_write(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle, temporary = tempfile.mkstemp(prefix='.keyword-', dir=path.parent)
-    try:
-        with os.fdopen(handle, 'wb') as stream:
-            stream.write(data)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
-
-
-def scan_folder(source, keys, output=None, cancel=None, progress=None):
+def scan_folder(source, keys, cancel=None, progress=None):
     source = Path(source).absolute()
     if not source.is_dir() or is_link(source):
         raise ValueError('Choose an existing, non-linked directory.')
     source = source.resolve()
-    output = Path(output).absolute() if output else None
-    if output:
-        output = output.resolve()
-        if output == source or source in output.parents or output in source.parents:
-            raise ValueError('Cleaned folder must be separate from the source directory tree.')
-        output.mkdir(parents=True, exist_ok=False)
-    report = Report(str(source), str(output) if output else None,
-                    datetime.now(timezone.utc).isoformat())
+    report = Report(str(source), datetime.now(timezone.utc).isoformat())
     root_check = Inspection()
-    keys.inspect((output or source).name, 'Selected folder name', root_check)
+    keys.inspect(source.name, 'Selected folder name', root_check)
     if root_check.hits:
-        report.issues.append('Selected folder name contains a configured keyword; rename it and scan again.')
+        report.issues.append('Selected folder name contains a configured keyword.')
     cancel = cancel or threading.Event()
 
     def error(exc):
@@ -359,59 +294,41 @@ def scan_folder(source, keys, output=None, cancel=None, progress=None):
             except OSError as exc:
                 folders.remove(folder)
                 error(exc)
-        if output:
-            (output / parent.relative_to(source)).mkdir(parents=True, exist_ok=True)
         for filename in sorted(files):
             if cancel.is_set():
                 report.cancelled = True
                 break
             path = parent / filename
             relative = path.relative_to(source)
-            found, remaining, issues, changed = [], [], [], False
+            result = Inspection()
+            keys.inspect(str(relative), 'File or directory name', result)
             try:
                 if is_link(path) or not stat.S_ISREG(path.stat().st_mode):
-                    raise ValueError('Linked or special file not inspected or copied.')
+                    raise ValueError('Linked or special file not inspected.')
                 info = path.stat()
                 if info.st_size > MAX_FILE:
-                    raise ValueError('File exceeds 100 MiB; not inspected or copied.')
+                    raise ValueError('File exceeds 100 MiB inspection limit.')
                 data = path.read_bytes()
+                inspected = inspect_file(data, path, keys)
+                result.hits.extend(inspected.hits)
+                result.issues.extend(inspected.issues)
                 after = path.stat()
                 if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
-                    raise ValueError('Source changed during scan; retry with files closed.')
-                streams = alternate_streams(path)
-                name_check = Inspection()
-                keys.inspect(str(relative), 'File or directory name', name_check)
-                try:
-                    _, before = inspect_file(data, path, keys)
-                    found = name_check.hits + before.hits
-                    cleaned = data
-                    if output and before.hits:
-                        cleaned, _ = inspect_file(data, path, keys, edit=True)
-                    # Re-open serialized bytes, including Office XML and PDF objects.
-                    _, verified = inspect_file(cleaned, path, keys)
-                    remaining = name_check.hits + verified.hits
-                    issues = verified.issues
-                    if streams:
-                        issues.append('Source has uninspected alternate data streams; manual review required.')
-                    changed = cleaned != data
-                except Exception as exc:
-                    cleaned = data
-                    remaining = found or name_check.hits
-                    issues.append(f'{type(exc).__name__}: {exc}')
-                if output:
-                    target = output / relative
-                    atomic_write(target, cleaned)
-                    if target.read_bytes() != cleaned:
-                        raise OSError('Written output failed byte verification.')
+                    result.issues.append('Source changed during scan; retry with files closed.')
+                if alternate_streams(path):
+                    result.issues.append('Uninspected alternate data streams; manual review required.')
             except Exception as exc:
-                issues.append(f'{type(exc).__name__}: {exc}')
-            status = 'REVIEW' if issues else ('MATCH' if remaining else 'CLEAN')
-            report.files.append(FileResult(str(relative), status, found, remaining,
-                                           list(dict.fromkeys(issues)), changed))
+                result.issues.append(f'{type(exc).__name__}: {exc}')
+            status = 'Failed' if result.hits or result.issues else 'OK'
+            report.files.append(FileResult(str(relative), status, result.hits,
+                                           list(dict.fromkeys(result.issues))))
             if progress:
                 progress(len(report.files), str(relative))
     if not report.files:
         report.issues.append('No files inspected.')
     if cancel.is_set():
         report.cancelled = True
+    # Actual keyword matches first, inspection failures next, OK files last.
+    report.files.sort(key=lambda item: (0 if item.found else 1 if item.status == 'Failed' else 2,
+                                       item.path.casefold()))
     return report
