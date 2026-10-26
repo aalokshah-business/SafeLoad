@@ -332,6 +332,6 @@ def scan_folder(source, keys, cancel=None, progress=None):
     if cancel.is_set():
         report.cancelled = True
     # Actual keyword matches first, inspection failures next, OK files last.
-    report.files.sort(key=lambda item: (0 if item.found else 1 if item.status == 'Not Scanned' else 2,
-                                       item.path.casefold()))
+    status_order = {'Failed': 0, 'Not Scanned': 1, 'OK': 2}
+    report.files.sort(key=lambda item: (status_order[item.status], item.path.casefold()))
     return report

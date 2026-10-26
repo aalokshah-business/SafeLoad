@@ -23,9 +23,9 @@ class App(tk.Tk):
         style.configure('TFrame', background='#eef2f7')
         style.configure('TLabel', background='#eef2f7', foreground='#25334a')
         style.configure('Title.TLabel', font=('Segoe UI', 23, 'bold'))
-        style.configure('Status.TLabel', font=('Segoe UI', 13, 'bold'), padding=12)
+        style.configure('Status.TLabel', font=('Segoe UI', 13, 'bold'), padding=(8, 6))
         style.configure('TButton', padding=(12, 7))
-        style.configure('TNotebook.Tab', padding=(22, 10))
+        style.configure('TNotebook.Tab', padding=(16, 6))
         style.configure('Treeview', rowheight=29)
         self.events = queue.Queue()
         self.cancel = threading.Event()
@@ -33,17 +33,17 @@ class App(tk.Tk):
         self.running = False
         self.source = tk.StringVar()
         self.case = tk.BooleanVar(value=False)
-        self.state_text = tk.StringVar(value='NOT SCANNED — choose a folder and enter keywords')
+        self.state_text = tk.StringVar(value='Not Scanned — Choose A Folder And Enter Keywords')
         self.progress_text = tk.StringVar(value='All file processing stays on this computer.')
         self.protocol('WM_DELETE_WINDOW', self.close)
-        shell = ttk.Frame(self, padding=22)
+        shell = ttk.Frame(self, padding=16)
         shell.pack(fill='both', expand=True)
         ttk.Label(shell, text='SafeLoad', style='Title.TLabel').pack(anchor='w')
-        ttk.Label(shell, text='Scan for keywords. Review failed files. Resolve matches manually.').pack(anchor='w', pady=(3, 16))
+        ttk.Label(shell, text='Scan Folders For Keywords. Review File Status.').pack(anchor='w', pady=(2, 10))
         tabs = ttk.Notebook(shell)
         tabs.pack(fill='x')
-        directory = ttk.Frame(tabs, padding=18)
-        keywords = ttk.Frame(tabs, padding=18)
+        directory = ttk.Frame(tabs, padding=(12, 8))
+        keywords = ttk.Frame(tabs, padding=(12, 8))
         tabs.add(directory, text='1  Directory')
         tabs.add(keywords, text='2  Keywords')
         directory.columnconfigure(1, weight=1)
@@ -53,15 +53,17 @@ class App(tk.Tk):
         self.browse_source = ttk.Button(directory, text='Browse…', command=self.choose_source)
         self.browse_source.grid(row=0, column=2, padx=(10, 0))
         ttk.Label(directory, text='Subfolders included. Files are only read; matching files appear first.').grid(
-            row=1, column=0, columnspan=3, sticky='w', pady=(12, 0))
-        ttk.Label(keywords, text='Keywords or phrases, separated by commas').pack(anchor='w')
-        self.keywords = tk.Text(keywords, height=3, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
-        self.keywords.pack(fill='x', pady=8)
-        self.case_check = ttk.Checkbutton(keywords, text='Case-Sensitive Matching', variable=self.case)
-        self.case_check.pack(anchor='w')
-        ttk.Label(keywords, text='Literal substring matches, including inside longer words. Commas separate entries; no regex.').pack(anchor='w', pady=(6, 0))
+            row=1, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        keyword_header = ttk.Frame(keywords)
+        keyword_header.pack(fill='x')
+        ttk.Label(keyword_header, text='Keywords Or Phrases, Separated By Commas').pack(side='left')
+        self.case_check = ttk.Checkbutton(keyword_header, text='Case-Sensitive Matching', variable=self.case)
+        self.case_check.pack(side='right')
+        self.keywords = tk.Text(keywords, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.keywords.pack(fill='x', pady=4)
+        ttk.Label(keywords, text='Literal substring matches, including inside longer words. Commas separate entries; no regex.').pack(anchor='w', pady=(4, 0))
         controls = ttk.Frame(shell)
-        controls.pack(fill='x', pady=14)
+        controls.pack(fill='x', pady=8)
         self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.start)
         self.scan_button.pack(side='left')
         self.stop_button = ttk.Button(controls, text='Cancel', command=self.cancel.set, state='disabled')
@@ -70,9 +72,9 @@ class App(tk.Tk):
         self.export_button.pack(side='right')
         self.status = ttk.Label(shell, textvariable=self.state_text, style='Status.TLabel')
         self.status.pack(fill='x')
-        ttk.Label(shell, textvariable=self.progress_text).pack(anchor='w', pady=(8, 6))
+        ttk.Label(shell, textvariable=self.progress_text).pack(anchor='w', pady=(4, 4))
         self.bar = ttk.Progressbar(shell, mode='indeterminate')
-        self.bar.pack(fill='x', pady=(0, 12))
+        self.bar.pack(fill='x', pady=(0, 8))
         panes = ttk.Panedwindow(shell, orient='horizontal')
         panes.pack(fill='both', expand=True)
         listing = ttk.Frame(panes)
@@ -103,7 +105,7 @@ class App(tk.Tk):
         detail_scroll.pack(side='right', fill='y')
         self.detail.pack(fill='both', expand=True)
         ttk.Label(shell, wraplength=min(1000, width - 60), text='Safe = no configured keyword matches in inspected text, within documented format limits. '
-                  'Not a security certification.\nOK = no keyword match. Failed = keyword match. Not Scanned = unable to check the file.').pack(before=panes, side='bottom', fill='x', pady=(12, 0))
+                  'Not a security certification.\nOK = no keyword match. Failed = keyword match. Not Scanned = unable to check the file.').pack(before=panes, side='bottom', fill='x', pady=(8, 0))
         self.after(100, self.poll)
         for variable in (self.source, self.case):
             variable.trace_add('write', self.invalidate)
@@ -113,7 +115,7 @@ class App(tk.Tk):
         if self.running or not self.report:
             return
         self.report = None
-        self.state_text.set('NOT SCANNED — settings changed; scan again')
+        self.state_text.set('Not Scanned — Settings Changed; Scan Again')
         self.status.configure(foreground='#25334a')
         self.export_button.configure(state='disabled')
         self.table.delete(*self.table.get_children())
@@ -144,7 +146,7 @@ class App(tk.Tk):
         self.cancel.clear()
         self.table.delete(*self.table.get_children())
         self.set_details('Select a file to inspect match locations and review reasons.')
-        self.state_text.set('SCANNING — no safety result yet')
+        self.state_text.set('Scanning — No Safety Result Yet')
         self.status.configure(foreground='#25334a')
         for control in (self.scan_button, self.export_button, self.source_entry,
                         self.browse_source, self.case_check):
@@ -187,7 +189,7 @@ class App(tk.Tk):
         self.keywords.configure(state='normal')
         self.stop_button.configure(state='disabled')
         if kind == 'error':
-            self.state_text.set('SCAN INCOMPLETE — unable to finish')
+            self.state_text.set('Scan Incomplete — Unable To Finish')
             self.status.configure(foreground='#a61b29')
             self.progress_text.set(value)
             messagebox.showerror('Scan Failed', value)
@@ -196,15 +198,15 @@ class App(tk.Tk):
         self.export_button.configure(state='normal')
         failed = sum(f.status == 'Failed' for f in value.files)
         unscanned = sum(f.status == 'Not Scanned' for f in value.files)
-        state = 'UNSAFE — keyword matches found' if failed else 'SAFE — no keyword matches found'
+        state = 'Unsafe — Keyword Matches Found' if failed else 'Safe — No Keyword Matches Found'
         if not failed and not value.safe:
-            state = 'SCAN INCOMPLETE — some files could not be checked'
+            state = 'Scan Incomplete — Some Files Could Not Be Checked'
         if value.cancelled:
-            state = 'SCAN INCOMPLETE — cancelled'
+            state = 'Scan Incomplete — Cancelled'
         self.state_text.set(state)
         self.status.configure(foreground='#11633a' if value.safe else '#a61b29')
         self.progress_text.set(f'{len(value.files)} files · {failed} Failed · '
-                               f'{len(value.files) - failed - unscanned} OK · {unscanned} Not Scanned')
+                               f'{unscanned} Not Scanned · {len(value.files) - failed - unscanned} OK')
         for i, item in enumerate(value.files):
             self.table.insert('', 'end', iid=str(i), values=(item.status, item.path,
                               sum(h.count for h in item.found)), tags=(item.status,))
@@ -233,15 +235,15 @@ class App(tk.Tk):
             self.set_details(self.report.issues[int(key.split('-')[1])])
             return
         item = self.report.files[int(key)]
-        reason = {'OK': 'No keyword match found.', 'Failed': 'Keyword match found.',
-                  'Not Scanned': 'Unable to check this file.'}[item.status]
+        reason = {'OK': 'No Keyword Match Found.', 'Failed': 'Keyword Match Found.',
+                  'Not Scanned': 'Unable To Check This File.'}[item.status]
         lines = [item.path, '', 'Status: ' + item.status, 'Reason: ' + reason]
         if item.status == 'Not Scanned':
             lines.extend(['', 'Scan Error:'] + item.issues)
         lines.extend(['', 'Keyword Matches:'])
         lines.extend(f'Keyword #{h.keyword} · {h.location} · {h.count} match(es)' for h in item.found)
         if not item.found:
-            lines.append('Not checked.' if item.status == 'Not Scanned' else 'None in inspected text.')
+            lines.append('Not Checked.' if item.status == 'Not Scanned' else 'None In Inspected Text.')
         if item.issues and item.status != 'Not Scanned':
             lines.extend(['', 'Scan Notes:'] + item.issues)
         if item.status == 'Failed':
@@ -267,7 +269,7 @@ class App(tk.Tk):
     def close(self):
         if self.running:
             self.cancel.set()
-            self.state_text.set('CANCELLING — waiting for current file; folder is not verified')
+            self.state_text.set('Cancelling — Waiting For Current File; Folder Is Not Verified')
             self.after(150, self.wait_close)
         else:
             self.destroy()

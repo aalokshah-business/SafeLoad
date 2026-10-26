@@ -25,7 +25,7 @@ Alternatively extract the **entire** ZIP and open `SafeLoad\SafeLoad.exe` withou
 ## Use
 
 1. In **Directory**, choose the source folder. All subfolders and hidden files are visited. Links/junctions are flagged rather than followed.
-2. In **Keywords**, enter comma-separated words or phrases. Matching is literal and case-insensitive by default, including inside longer words. Empty entries and exact duplicates are ignored. Commas cannot be part of a keyword. Use **Case-Sensitive Matching** when needed.
+2. In **Keywords**, enter comma-separated words or phrases. Matching is literal and case-insensitive by default, including inside longer words. Spaces before and after commas are trimmed. Empty entries and exact duplicates are ignored. Commas cannot be part of a keyword. Use **Case-Sensitive Matching** when needed.
 3. Select **Scan Folder**. The list shows keyword matches first, **Not Scanned** files next, and **OK** files last. All **Failed** entries are highlighted. Select an entry to see keyword numbers, locations and inspection issues.
 4. Resolve files manually and select **Scan Folder** again. No automatic cleanup is available.
 5. Optionally select **Save Report** to save JSON outside the source directory. Reports omit keyword values and file excerpts; paths and parser error messages may still contain sensitive information. Keyword numbers follow the unique entries in the Keywords tab.

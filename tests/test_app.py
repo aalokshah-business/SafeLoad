@@ -4,6 +4,13 @@ import time
 import unittest
 from tkinter import ttk
 from app import App
+from scanner import FileResult, Hit, Report
+
+
+def close_app(app):
+    for callback in app.tk.call('after', 'info'):
+        app.after_cancel(callback)
+    app.destroy()
 
 
 class DesktopTests(unittest.TestCase):
@@ -46,11 +53,50 @@ class DesktopTests(unittest.TestCase):
                         self.assertEqual((root / 'z.txt').read_text(), 'Secret')
                     else:
                         self.assertTrue(all(row[0] == 'OK' for row in rows))
+                        self.assertEqual(app.state_text.get(), 'Safe — No Keyword Matches Found')
                 app.case.set(True)
                 self.assertIsNone(app.report)
-                self.assertIn('NOT SCANNED', app.state_text.get())
+                self.assertIn('Not Scanned', app.state_text.get())
             finally:
-                app.destroy()
+                close_app(app)
+
+
+class ResultLayoutTests(unittest.TestCase):
+    def test_status_sequence_including_folder_errors(self):
+        app = App()
+        app.withdraw()
+        try:
+            report = Report('C:/example', 'test', files=[
+                FileResult('z.txt', 'Failed', [Hit(1, 'Line 1', 1)], []),
+                FileResult('a.bin', 'Not Scanned', [], ['Unsupported file']),
+                FileResult('b.txt', 'OK', [], []),
+            ], issues=['Unreadable directory'])
+            app.finish('done', report)
+            rows = [app.table.item(i, 'values') for i in app.table.get_children()]
+            self.assertEqual([r[0] for r in rows], ['Failed', 'Not Scanned', 'Not Scanned', 'OK'])
+        finally:
+            close_app(app)
+
+    def test_compact_tabs_leave_room_for_results(self):
+        app = App()
+        try:
+            app.geometry('1000x660')
+            app.update()
+            def find_tabs(widget):
+                for child in widget.winfo_children():
+                    if isinstance(child, ttk.Notebook):
+                        return child
+                    match = find_tabs(child)
+                    if match is not None:
+                        return match
+            tabs = find_tabs(app)
+            for tab in tabs.tabs():
+                tabs.select(tab)
+                app.update()
+                self.assertLess(tabs.winfo_height(), 170)
+                self.assertGreater(app.table.winfo_height(), 160)
+        finally:
+            close_app(app)
 
 
 if __name__ == '__main__':

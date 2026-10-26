@@ -25,6 +25,12 @@ def package(main, body, extra=None):
 
 
 class ScannerTests(unittest.TestCase):
+    def test_spaces_around_commas_are_ignored(self):
+        keys = Keywords('  alpha  , beta,   project key  , ,gamma , alpha ')
+        self.assertEqual(keys.words, ['alpha', 'beta', 'project key', 'gamma'])
+        result = inspect_file(b'alpha beta project key gamma', Path('x.txt'), keys)
+        self.assertEqual(sum(h.count for h in result.hits), 4)
+
     def test_literals_overlaps_and_case(self):
         self.assertEqual(len(list(Keywords('aba, bab').ranges('abab'))), 2)
         result = inspect_file(b'a.b axb SECRET secret', Path('x.txt'), Keywords('a.b, secret'))
