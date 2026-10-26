@@ -34,6 +34,7 @@ class Hit:
     keyword: int
     location: str
     count: int
+    keyword_text: str = ''
 
 
 @dataclass
@@ -67,8 +68,8 @@ class Report:
         body = asdict(self)
         body['safe_for_configured_keywords'] = self.safe
         body['scope'] = ('Keyword inspection only; not a security certification. '
-                         'Keyword numbers refer to the current Keywords tab. '
-                         'Report paths may contain sensitive information.')
+                         'Matched keyword names are included. '
+                         'Report terms and paths may contain sensitive information.')
         path.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
@@ -101,7 +102,7 @@ class Keywords:
         counts = {}
         for index, _, _ in self.ranges(text):
             counts[index] = counts.get(index, 0) + 1
-        inspection.hits.extend(Hit(i, location, n) for i, n in counts.items())
+        inspection.hits.extend(Hit(i, location, n, self.words[i - 1]) for i, n in counts.items())
 
 def decode_text(data):
     for bom, encoding in [(codecs.BOM_UTF32_LE, 'utf-32'),
@@ -207,12 +208,12 @@ def inspect_file(data, path, keys):
     if suffix in OFFICE:
         return office(data, suffix, keys)
     if suffix not in TEXT_EXTENSIONS and path.name.lower() not in TEXT_EXTENSIONS and suffix:
-        raise ValueError('Unsupported file type; manual review required.')
+        raise ValueError(f'Unsupported file type: {suffix}. No text reader is available for this format.')
     text, _ = decode_text(data)
     result = Inspection()
     # Scan the entire string so multi-line keywords are not missed.
     for index, a, _ in keys.ranges(text):
-        result.hits.append(Hit(index, f'Line {text.count(chr(10), 0, a) + 1}', 1))
+        result.hits.append(Hit(index, f'Line {text.count(chr(10), 0, a) + 1}', 1, keys.words[index - 1]))
     return result
 
 

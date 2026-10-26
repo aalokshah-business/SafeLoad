@@ -7,7 +7,7 @@ if errorlevel 1 goto failed
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --onedir --name SafeLoad --icon assets/app.ico --add-data "assets;assets" --collect-all pymupdf app.py
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" scripts\package_release.py --version 1.0.3
+".venv\Scripts\python.exe" scripts\package_release.py --version 1.0.4
 if errorlevel 1 goto failed
 echo Built dist\SafeLoad-Windows-x64.zip. Extract the ENTIRE ZIP on the office computer.
 pause

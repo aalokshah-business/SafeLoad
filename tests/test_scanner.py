@@ -30,6 +30,7 @@ class ScannerTests(unittest.TestCase):
         self.assertEqual(keys.words, ['alpha', 'beta', 'project key', 'gamma'])
         result = inspect_file(b'alpha beta project key gamma', Path('x.txt'), keys)
         self.assertEqual(sum(h.count for h in result.hits), 4)
+        self.assertEqual([h.keyword_text for h in result.hits], keys.words)
 
     def test_literals_overlaps_and_case(self):
         self.assertEqual(len(list(Keywords('aba, bab').ranges('abab'))), 2)
@@ -126,6 +127,7 @@ class ScannerTests(unittest.TestCase):
             result = scan_folder(root, Keywords('secret'))
             self.assertEqual(result.files[0].status, 'Failed')
             self.assertEqual(result.files[0].found[0].location, 'File or directory name')
+            self.assertEqual(result.files[0].found[0].keyword_text, 'secret')
 
     def test_empty_cancelled_and_safe_results(self):
         with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
@@ -139,16 +141,18 @@ class ScannerTests(unittest.TestCase):
             self.assertTrue(result.cancelled)
             self.assertFalse(result.safe)
 
-    def test_report_omits_keyword_values(self):
+    def test_report_names_matched_keywords_without_file_excerpts(self):
         with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
             root = Path(directory) / 'input'
             root.mkdir()
-            (root / 'test.txt').write_text('super-sensitive content')
+            (root / 'test.txt').write_text('super-sensitive unrelated-file-context')
             report = scan_folder(root, Keywords('super-sensitive'))
             target = Path(directory) / 'report.json'
             report.save(target)
-            self.assertNotIn('super-sensitive', target.read_text())
-            self.assertFalse(json.loads(target.read_text())['safe_for_configured_keywords'])
+            body = json.loads(target.read_text())
+            self.assertEqual(body['files'][0]['found'][0]['keyword_text'], 'super-sensitive')
+            self.assertNotIn('unrelated-file-context', target.read_text())
+            self.assertFalse(body['safe_for_configured_keywords'])
 
     def test_xml_entities_and_match_limit(self):
         data = package('word/document.xml', '<!DOCTYPE root [<!ENTITY x SYSTEM "file:///C:/secrets">]><root>&x;</root>')

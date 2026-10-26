@@ -260,7 +260,7 @@ class App(tk.Tk):
         self.set_details('Scanned folder:\n' + value.source +
                          '\n\nSelect a failed file to see keyword locations or inspection issues. '
                          'Resolve files manually, then scan again.\n\nFiles are never modified. '
-                         'Reports may contain sensitive paths. Keyword numbers follow the unique entries in the Keywords tab.')
+                         'Reports include matched keyword names and may contain sensitive terms and paths.')
 
     def set_details(self, text):
         self.detail.configure(state='normal')
@@ -274,16 +274,18 @@ class App(tk.Tk):
             return
         key = selection[0]
         if key.startswith('issue-'):
-            self.set_details(self.report.issues[int(key.split('-')[1])])
+            self.set_details('Status: Not Scanned\nReason: ' + self.report.issues[int(key.split('-')[1])])
             return
         item = self.report.files[int(key)]
         reason = {'OK': 'No Keyword Match Found.', 'Failed': 'Keyword Match Found.',
-                  'Not Scanned': 'Unable To Check This File.'}[item.status]
+                  'Not Scanned': item.issues[0] if item.issues else 'No Scan Result Was Available.'}[item.status]
         lines = [item.path, '', 'Status: ' + item.status, 'Reason: ' + reason]
-        if item.status == 'Not Scanned':
-            lines.extend(['', 'Scan Error:'] + item.issues)
+        if item.status == 'Not Scanned' and len(item.issues) > 1:
+            lines.extend(['', 'Additional Scan Details:'] + item.issues[1:])
         lines.extend(['', 'Keyword Matches:'])
-        lines.extend(f'Keyword #{h.keyword} · {h.location} · {h.count} match(es)' for h in item.found)
+        for hit in item.found:
+            keyword = json.dumps(hit.keyword_text, ensure_ascii=False) if hit.keyword_text else f'#{hit.keyword}'
+            lines.append(f'Keyword {keyword} · {hit.location} · {hit.count} match(es)')
         if not item.found:
             lines.append('Not Checked.' if item.status == 'Not Scanned' else 'None In Inspected Text.')
         if item.issues and item.status != 'Not Scanned':

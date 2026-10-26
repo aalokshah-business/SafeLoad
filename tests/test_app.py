@@ -71,6 +71,31 @@ class DesktopTests(unittest.TestCase):
 
 
 class ResultLayoutTests(unittest.TestCase):
+    def test_details_name_keywords_and_explain_skipped_files(self):
+        app = make_app()
+        app.withdraw()
+        try:
+            report = Report('C:/example', 'test', files=[
+                FileResult('book.json', 'Failed', [Hit(4, 'Line 17', 1, 'secret key')], []),
+                FileResult('locked.bin', 'Not Scanned', [], ['PermissionError: Access is denied.']),
+            ], issues=['Cannot enumerate directory: private'])
+            app.finish('done', report)
+            app.table.selection_set('0')
+            app.show_details()
+            details = app.detail.get('1.0', 'end')
+            self.assertIn('Keyword "secret key" · Line 17 · 1 match(es)', details)
+            self.assertNotIn('Keyword #4', details)
+            app.table.selection_set('1')
+            app.show_details()
+            details = app.detail.get('1.0', 'end')
+            self.assertIn('Reason: PermissionError: Access is denied.', details)
+            self.assertLess(details.index('Access is denied.'), details.index('Keyword Matches:'))
+            app.table.selection_set('issue-0')
+            app.show_details()
+            self.assertIn('Reason: Cannot enumerate directory: private', app.detail.get('1.0', 'end'))
+        finally:
+            close_app(app)
+
     def test_status_sequence_including_folder_errors(self):
         app = make_app()
         app.withdraw()

@@ -38,8 +38,8 @@ To keep the icon on the taskbar after closing the app, right-click the running i
 
 SafeLoad checks file names and supported file contents. Results always appear in this order:
 
-- **Failed**: a configured keyword matched. These files appear first.
-- **Not Scanned**: the file could not be checked; select it to see the reason.
+- **Failed**: a configured keyword matched. These files appear first. Select a file to see each keyword by name, its location and match count.
+- **Not Scanned**: the file could not be checked; select it to see the specific reason, such as unsupported format or denied file access.
 - **OK**: no configured keyword matched the inspected text.
 
 Resolve matches manually and scan again. **Safe** is a keyword-check result within the documented [format coverage](README.md#inspection-coverage), not a general security certification or permission to upload.
@@ -54,7 +54,7 @@ Settings are stored separately from the installed version at:
 %LOCALAPPDATA%\SafeLoad\settings.json
 ```
 
-The file contains your configured keywords in local JSON. It is not included in exported scan reports or uploaded by SafeLoad. Normal updates retain it. Remove this settings file only if you want to reset the saved keywords.
+The file contains your configured keywords in local JSON. The settings file is not embedded in exported reports or uploaded by SafeLoad. Scan reports include the names of keywords that matched, their locations, and reasons for files that were not scanned. Normal updates retain it. Remove this settings file only if you want to reset the saved keywords.
 
 ## Updating And Uninstalling
 
