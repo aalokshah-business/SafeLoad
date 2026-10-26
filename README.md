@@ -1,6 +1,6 @@
 # SafeLoad
 
-Offline Windows desktop keyword scanner. Choose a source folder, enter comma-separated keywords, and select **Scan Folder**. Matching files appear first with **Failed** status. Files without matches or inspection issues show **OK**. Select a failed file for locations and reasons, resolve it manually, and scan again. SafeLoad never edits, copies, deletes, cleans or redacts source files.
+Offline Windows desktop keyword scanner. Choose a source folder, enter comma-separated keywords, and select **Scan Folder**. Matching files appear first with **Failed** status. Files with no keyword matches show **OK**. Unreadable or unsupported files show **Not Scanned**. Select a failed file for locations and reasons, resolve it manually, and scan again. SafeLoad never edits, copies, deletes, cleans or redacts source files.
 
 ## Install On Windows With One Command
 
@@ -26,11 +26,11 @@ Alternatively extract the **entire** ZIP and open `SafeLoad\SafeLoad.exe` withou
 
 1. In **Directory**, choose the source folder. All subfolders and hidden files are visited. Links/junctions are flagged rather than followed.
 2. In **Keywords**, enter comma-separated words or phrases. Matching is literal and case-insensitive by default, including inside longer words. Empty entries and exact duplicates are ignored. Commas cannot be part of a keyword. Use **Case-Sensitive Matching** when needed.
-3. Select **Scan Folder**. The list shows keyword matches first, other inspection failures next, and **OK** files last. All **Failed** entries are highlighted. Select an entry to see keyword numbers, locations and inspection issues.
+3. Select **Scan Folder**. The list shows keyword matches first, **Not Scanned** files next, and **OK** files last. All **Failed** entries are highlighted. Select an entry to see keyword numbers, locations and inspection issues.
 4. Resolve files manually and select **Scan Folder** again. No automatic cleanup is available.
 5. Optionally select **Save Report** to save JSON outside the source directory. Reports omit keyword values and file excerpts; paths and parser error messages may still contain sensitive information. Keyword numbers follow the unique entries in the Keywords tab.
 
-**OK** means no configured keyword matches or inspection issues were found in supported text. **Failed** means a keyword matched or the file could not be fully inspected. Folder **Safe** requires every file to be OK and the scan to finish without errors. Empty, cancelled or incomplete scans never receive Safe. This checks configured keywords; it is not a security certification or approval to upload. Keep source files unchanged during scans; the result describes the scan snapshot.
+**OK** means no configured keyword matches were found in inspected text. **Failed** means a keyword matched. Format limitations and scan notes do not cause Failed. **Not Scanned** means an error prevented the file from being checked; the reason is shown separately. Folder **Safe** requires every file to be OK and the scan to finish without errors. Empty, cancelled or incomplete scans never receive Safe. This checks configured keywords; it is not a security certification or approval to upload. Keep source files unchanged during scans; the result describes the scan snapshot.
 
 ## Inspection Coverage
 
@@ -40,10 +40,10 @@ Alternatively extract the **entire** ZIP and open `SafeLoad\SafeLoad.exe` withou
 | Word `.docx` | Package XML text, including split formatting runs, paragraphs, tables, headers, footers, comments and properties. |
 | Excel `.xlsx` | Package XML text, including shared/inline strings, split rich-text runs, formulas, cached values, comments and properties. |
 | PowerPoint `.pptx` | Package XML text, including split runs, slides, notes, comments, charts and properties. |
-| PDF | Searchable page text, metadata, annotations and form values. Every PDF remains Failed for manual review because images, outlined letters, arbitrary objects and attachments cannot be certified. |
-| Images, archives, binaries, legacy `.doc`/`.xls`/`.ppt`, macro formats, encrypted files | Failed for manual review. No OCR or password guessing. |
+| PDF | Searchable page text, metadata, annotations and form values. Status follows keyword matches in extracted text. Scope notes explain that images, outlined letters, arbitrary objects and attachments are not searched. |
+| Images, archives, binaries, legacy `.doc`/`.xls`/`.ppt`, macro formats, encrypted files | Not Scanned. No OCR or password guessing. |
 
-Office media/embedded data, ZIP comments/extra data, external relationships, unreadable content, and NTFS alternate streams cause Failed or folder-level inspection errors. Office attributes, XML tails, package part names and file/directory names are also checked. Source content and keywords never leave the app: no network requests, telemetry, cloud processing, document execution or Office automation.
+Office media/embedded data, ZIP comments/extra data, external relationships and NTFS alternate streams appear as scan notes. They do not cause a keyword failure. Unreadable content is Not Scanned; errors enumerating directories leave the folder scan incomplete. Office attributes, XML tails, package part names and file/directory names are also checked. Source content and keywords never leave the app: no network requests, telemetry, cloud processing, document execution or Office automation.
 
 Limits: 100 MiB per file; 250 MiB uncompressed Office package; 10,000 package entries; 100,000 matches per text section; 500 keywords, each at most 500 characters. Limit violations require manual review.
 

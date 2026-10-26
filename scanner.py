@@ -181,8 +181,8 @@ def pdf(data, keys):
         if doc.needs_pass:
             raise ValueError('Password-protected PDF cannot be inspected.')
         # Text extraction cannot certify every PDF object, outlined glyph or image.
-        result.issues.append('PDF requires manual review: only searchable text and standard metadata inspected; '
-                             'images, outlined text, object streams and attachments are not certified.')
+        result.issues.append('PDF text scope: searchable text, metadata, annotations and form values inspected; '
+                             'images, outlined text, object streams and attachments are not searched.')
         for field_name, value in doc.metadata.items():
             if isinstance(value, str):
                 keys.inspect(value, 'PDF metadata: ' + field_name, result)
@@ -301,6 +301,7 @@ def scan_folder(source, keys, cancel=None, progress=None):
             path = parent / filename
             relative = path.relative_to(source)
             result = Inspection()
+            checked = False
             keys.inspect(str(relative), 'File or directory name', result)
             try:
                 if is_link(path) or not stat.S_ISREG(path.stat().st_mode):
@@ -310,16 +311,18 @@ def scan_folder(source, keys, cancel=None, progress=None):
                     raise ValueError('File exceeds 100 MiB inspection limit.')
                 data = path.read_bytes()
                 inspected = inspect_file(data, path, keys)
+                checked = True
                 result.hits.extend(inspected.hits)
                 result.issues.extend(inspected.issues)
                 after = path.stat()
                 if (info.st_size, info.st_mtime_ns, info.st_ino) != (after.st_size, after.st_mtime_ns, after.st_ino):
+                    checked = False
                     result.issues.append('Source changed during scan; retry with files closed.')
                 if alternate_streams(path):
                     result.issues.append('Uninspected alternate data streams; manual review required.')
             except Exception as exc:
                 result.issues.append(f'{type(exc).__name__}: {exc}')
-            status = 'Failed' if result.hits or result.issues else 'OK'
+            status = 'Failed' if result.hits else 'OK' if checked else 'Not Scanned'
             report.files.append(FileResult(str(relative), status, result.hits,
                                            list(dict.fromkeys(result.issues))))
             if progress:
@@ -329,6 +332,6 @@ def scan_folder(source, keys, cancel=None, progress=None):
     if cancel.is_set():
         report.cancelled = True
     # Actual keyword matches first, inspection failures next, OK files last.
-    report.files.sort(key=lambda item: (0 if item.found else 1 if item.status == 'Failed' else 2,
+    report.files.sort(key=lambda item: (0 if item.found else 1 if item.status == 'Not Scanned' else 2,
                                        item.path.casefold()))
     return report

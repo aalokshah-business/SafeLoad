@@ -80,7 +80,7 @@ class App(tk.Tk):
         panes.add(listing, weight=3)
         panes.add(details, weight=2)
         self.table = ttk.Treeview(listing, columns=('status', 'path', 'matches'), height=6, show='headings', selectmode='browse')
-        for name, title, column_width in [('status', 'Status', 90), ('path', 'File', 390),
+        for name, title, column_width in [('status', 'Status', 110), ('path', 'File', 390),
                                    ('matches', 'Matches', 65)]:
             self.table.heading(name, text=title)
             self.table.column(name, width=column_width, minwidth=45, stretch=name == 'path')
@@ -94,6 +94,7 @@ class App(tk.Tk):
         listing.columnconfigure(0, weight=1)
         self.table.tag_configure('Failed', foreground='#a61b29', background='#fff0f0')
         self.table.tag_configure('OK', foreground='#11633a')
+        self.table.tag_configure('Not Scanned', foreground='#8b4300', background='#fff4de')
         self.table.bind('<<TreeviewSelect>>', self.show_details)
         self.detail = tk.Text(details, width=34, height=6, wrap='word', state='disabled',
                               font=('Segoe UI', 10), padx=12, pady=10, relief='flat')
@@ -102,7 +103,7 @@ class App(tk.Tk):
         detail_scroll.pack(side='right', fill='y')
         self.detail.pack(fill='both', expand=True)
         ttk.Label(shell, wraplength=min(1000, width - 60), text='Safe = no configured keyword matches in inspected text, within documented format limits. '
-                  'Not a security certification.\nFailed = keyword match or incomplete inspection. Resolve files manually, then scan again.').pack(before=panes, side='bottom', fill='x', pady=(12, 0))
+                  'Not a security certification.\nOK = no keyword match. Failed = keyword match. Not Scanned = unable to check the file.').pack(before=panes, side='bottom', fill='x', pady=(12, 0))
         self.after(100, self.poll)
         for variable in (self.source, self.case):
             variable.trace_add('write', self.invalidate)
@@ -186,27 +187,31 @@ class App(tk.Tk):
         self.keywords.configure(state='normal')
         self.stop_button.configure(state='disabled')
         if kind == 'error':
-            self.state_text.set('NOT SAFE — scan failed or incomplete')
+            self.state_text.set('SCAN INCOMPLETE — unable to finish')
             self.status.configure(foreground='#a61b29')
             self.progress_text.set(value)
             messagebox.showerror('Scan Failed', value)
             return
         self.report = value
         self.export_button.configure(state='normal')
-        state = 'SAFE — no configured keyword matches in inspected text' if value.safe else 'NOT SAFE — failed files require manual review'
+        failed = sum(f.status == 'Failed' for f in value.files)
+        unscanned = sum(f.status == 'Not Scanned' for f in value.files)
+        state = 'UNSAFE — keyword matches found' if failed else 'SAFE — no keyword matches found'
+        if not failed and not value.safe:
+            state = 'SCAN INCOMPLETE — some files could not be checked'
         if value.cancelled:
-            state = 'NOT SAFE — cancelled; scan is incomplete'
+            state = 'SCAN INCOMPLETE — cancelled'
         self.state_text.set(state)
         self.status.configure(foreground='#11633a' if value.safe else '#a61b29')
-        failed = sum(f.status == 'Failed' for f in value.files)
-        self.progress_text.set(f'{len(value.files)} files · {failed} Failed · {len(value.files) - failed} OK')
+        self.progress_text.set(f'{len(value.files)} files · {failed} Failed · '
+                               f'{len(value.files) - failed - unscanned} OK · {unscanned} Not Scanned')
         for i, item in enumerate(value.files):
             self.table.insert('', 'end', iid=str(i), values=(item.status, item.path,
                               sum(h.count for h in item.found)), tags=(item.status,))
         # Keep folder-level inspection failures above the OK files, after matches.
-        position = failed
+        position = failed + unscanned
         for i, issue in enumerate(value.issues):
-            self.table.insert('', position, iid=f'issue-{i}', values=('Failed', issue, ''), tags=('Failed',))
+            self.table.insert('', position, iid=f'issue-{i}', values=('Not Scanned', issue, ''), tags=('Not Scanned',))
             position += 1
         self.set_details('Scanned folder:\n' + value.source +
                          '\n\nSelect a failed file to see keyword locations or inspection issues. '
@@ -228,14 +233,19 @@ class App(tk.Tk):
             self.set_details(self.report.issues[int(key.split('-')[1])])
             return
         item = self.report.files[int(key)]
-        lines = [item.path, '', 'Status: ' + item.status, '', 'Keyword Matches:']
+        reason = {'OK': 'No keyword match found.', 'Failed': 'Keyword match found.',
+                  'Not Scanned': 'Unable to check this file.'}[item.status]
+        lines = [item.path, '', 'Status: ' + item.status, 'Reason: ' + reason]
+        if item.status == 'Not Scanned':
+            lines.extend(['', 'Scan Error:'] + item.issues)
+        lines.extend(['', 'Keyword Matches:'])
         lines.extend(f'Keyword #{h.keyword} · {h.location} · {h.count} match(es)' for h in item.found)
         if not item.found:
-            lines.append('None in inspected text.')
-        if item.issues:
-            lines.extend(['', 'Inspection Issues:'] + item.issues)
+            lines.append('Not checked.' if item.status == 'Not Scanned' else 'None in inspected text.')
+        if item.issues and item.status != 'Not Scanned':
+            lines.extend(['', 'Scan Notes:'] + item.issues)
         if item.status == 'Failed':
-            lines.extend(['', 'Review this file manually, resolve matches or inspection issues, then scan again.'])
+            lines.extend(['', 'Review this file manually, resolve keyword matches, then scan again.'])
         self.set_details('\n'.join(lines))
 
     def export(self):

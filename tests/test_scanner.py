@@ -48,7 +48,7 @@ class ScannerTests(unittest.TestCase):
             before = snapshot()
             result = scan_folder(root, Keywords('secret'))
             self.assertFalse(result.safe)
-            self.assertEqual([f.status for f in result.files], ['Failed', 'Failed', 'Failed', 'OK'])
+            self.assertEqual([f.status for f in result.files], ['Failed', 'Failed', 'Not Scanned', 'OK'])
             self.assertTrue(result.files[0].found and result.files[1].found)
             self.assertFalse(result.files[2].found)
             self.assertEqual(result.files[-1].path, 'a.txt')
@@ -90,7 +90,28 @@ class ScannerTests(unittest.TestCase):
                 (root / name).write_bytes(data)
             result = scan_folder(root, Keywords('secret'))
             self.assertFalse(result.safe)
-            self.assertTrue(all(f.status == 'Failed' and f.issues for f in result.files))
+            self.assertTrue(all(f.status == 'Not Scanned' and f.issues for f in result.files))
+
+    def test_scan_notes_do_not_cause_keyword_failure(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'catalog.json').write_text('{"name": "catalog"}', encoding='utf-8')
+            with patch('scanner.alternate_streams', return_value=[':Zone.Identifier:$DATA']):
+                result = scan_folder(root, Keywords('secret'))
+            self.assertEqual(result.files[0].status, 'OK')
+            self.assertFalse(result.files[0].found)
+            self.assertTrue(result.files[0].issues)
+
+    def test_pdf_without_keyword_is_ok_despite_scope_notes(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            with pymupdf.open() as doc:
+                doc.new_page().insert_text((72, 72), 'Ordinary text')
+                (root / 'example.pdf').write_bytes(doc.tobytes())
+            result = scan_folder(root, Keywords('secret'))
+            self.assertTrue(result.safe)
+            self.assertEqual(result.files[0].status, 'OK')
+            self.assertTrue(result.files[0].issues)
 
     def test_path_keywords(self):
         with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
