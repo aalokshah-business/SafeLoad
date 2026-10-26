@@ -1,5 +1,6 @@
 """Two-tab, offline desktop interface for keyword inspection."""
 from pathlib import Path
+import os
 import queue
 import threading
 import tkinter as tk
@@ -11,6 +12,9 @@ from scanner import Keywords, scan_folder
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        icon = Path(__file__).resolve().parent / 'assets' / 'app.ico'
+        if os.name == 'nt' and icon.is_file():
+            self.iconbitmap(default=str(icon))
         self.title('SafeLoad | Offline Keyword Scanner')
         width = min(1120, self.winfo_screenwidth() - 50)
         height = min(780, self.winfo_screenheight() - 100)

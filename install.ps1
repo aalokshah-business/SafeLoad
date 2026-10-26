@@ -87,12 +87,17 @@ try {
                 $shortcut = $shell.CreateShortcut((Join-Path $location 'SafeLoad.lnk'))
                 $shortcut.TargetPath = $exe
                 $shortcut.WorkingDirectory = $destination
+                $shortcut.IconLocation = $exe + ',0'
                 $shortcut.Description = 'SafeLoad - Offline Keyword Scanner'
                 $shortcut.Save()
             }
         }
     }
     Write-Host "SafeLoad $version installed at $destination"
+    if (-not $NoShortcuts) {
+        Write-Host 'Desktop and Start Menu shortcuts created.'
+        Write-Host 'To keep SafeLoad on the taskbar: open it, right-click its taskbar icon, then choose Pin To Taskbar.'
+    }
     if (-not $NoLaunch) { Start-Process -FilePath $exe }
 }
 finally {

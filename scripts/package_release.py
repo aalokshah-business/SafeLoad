@@ -21,7 +21,7 @@ source.mkdir(exist_ok=True)
 for name in ('app.py', 'scanner.py', 'requirements.txt', 'README.md', 'LICENSE', 'install.ps1',
              'Start SafeLoad.cmd', 'Build Windows App.cmd'):
     shutil.copy2(root / name, source / name)
-for name in ('tests', 'scripts'):
+for name in ('tests', 'scripts', 'assets'):
     shutil.copytree(root / name, source / name, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('__pycache__'))
 for name in ('README.md', 'LICENSE', 'install.ps1'):

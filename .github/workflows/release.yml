@@ -23,7 +23,7 @@ jobs:
       - name: Test Installer
         run: powershell -NoProfile -File scripts/test_installer.ps1
       - name: Build
-        run: python -m PyInstaller --noconfirm --windowed --onedir --name SafeLoad --collect-all pymupdf app.py
+        run: python -m PyInstaller --noconfirm --windowed --onedir --name SafeLoad --icon assets/app.ico --add-data "assets;assets" --collect-all pymupdf app.py
       - name: Package
         env:
           RELEASE_VERSION: ${{ inputs.version }}

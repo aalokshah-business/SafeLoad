@@ -7,10 +7,12 @@ Offline Windows desktop keyword scanner. Choose a source folder, enter comma-sep
 Run in PowerShell on Windows 10/11 x64:
 
 ```powershell
-irm https://raw.githubusercontent.com/aalokshah-business/SafeLoad/main/install.ps1 | iex
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/aalokshah-business/SafeLoad/main/install.ps1)))
 ```
 
-The installer downloads the latest Windows release from this public repository, verifies its SHA-256 checksum, installs under `%LOCALAPPDATA%\Programs\SafeLoad\versions`, creates Desktop and Start Menu shortcuts, and opens SafeLoad. No administrator account, Git, Python or Microsoft Office installation is required. GitHub access is required during installation; the app runs offline afterward. The executable is unsigned and normal organization software policies still apply. The command does not change PowerShell or Windows security policies. You can [review the installer](install.ps1) before running it.
+The installer downloads the latest Windows release from this public repository, verifies its SHA-256 checksum, installs under `%LOCALAPPDATA%\Programs\SafeLoad\versions`, creates Desktop and Start Menu shortcuts with the SafeLoad icon, and opens SafeLoad. The same icon appears on the taskbar while the app runs. No administrator account, Git, Python or Microsoft Office installation is required. GitHub access is required during installation; the app runs offline afterward. The executable is unsigned and normal organization software policies still apply. The command does not change PowerShell or Windows security policies. You can [review the installer](install.ps1) before running it.
+
+To keep the icon on the taskbar after closing the app, right-click its running taskbar icon and select **Pin To Taskbar**. Windows requires a user action for permanent taskbar pinning; the installer does not change taskbar policy.
 
 Run the same command to install a newer release. Each installation uses a new version directory so an existing running app is not overwritten; shortcuts point to the new version. Older versions are retained. To uninstall, close SafeLoad, delete its installation directory and remove its two shortcuts.
 
