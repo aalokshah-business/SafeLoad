@@ -18,13 +18,13 @@ if not (bundle / 'SafeLoad.exe').is_file():
     parser.error('Build dist/SafeLoad/SafeLoad.exe before packaging.')
 source = bundle / 'Source'
 source.mkdir(exist_ok=True)
-for name in ('app.py', 'scanner.py', 'requirements.txt', 'README.md', 'LICENSE', 'install.ps1',
+for name in ('app.py', 'scanner.py', 'requirements.txt', 'README.md', 'INSTALL.md', 'LICENSE', 'install.ps1',
              'Start SafeLoad.cmd', 'Build Windows App.cmd'):
     shutil.copy2(root / name, source / name)
 for name in ('tests', 'scripts', 'assets'):
     shutil.copytree(root / name, source / name, dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns('__pycache__'))
-for name in ('README.md', 'LICENSE', 'install.ps1'):
+for name in ('README.md', 'INSTALL.md', 'LICENSE', 'install.ps1'):
     shutil.copy2(root / name, bundle / name)
 (bundle / 'VERSION').write_text(args.version + '\n', encoding='ascii')
 packages = Path(sys.prefix) / 'Lib' / 'site-packages'

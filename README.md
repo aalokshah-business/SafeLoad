@@ -4,6 +4,8 @@ Offline Windows desktop keyword scanner. Choose a source folder, enter comma-sep
 
 ## Install On Windows With One Command
 
+See the [Windows Installation Guide](INSTALL.md) for the full setup, offline installation, saved settings, App Control troubleshooting, and an implementation comparison with AskAi.
+
 Run in PowerShell on Windows 10/11 x64:
 
 ```powershell
