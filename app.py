@@ -1,0 +1,301 @@
+"""Two-tab, offline desktop interface for keyword inspection."""
+from pathlib import Path
+import queue
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from datetime import datetime
+
+from scanner import Keywords, scan_folder
+
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title('SafeLoad | Offline keyword cleaner')
+        width = min(1120, self.winfo_screenwidth() - 50)
+        height = min(780, self.winfo_screenheight() - 100)
+        self.geometry(f'{width}x{height}')
+        self.minsize(min(920, width), min(660, height))
+        self.configure(bg='#eef2f7')
+        style = ttk.Style(self)
+        style.theme_use('clam')
+        style.configure('.', font=('Segoe UI', 10))
+        style.configure('TFrame', background='#eef2f7')
+        style.configure('TLabel', background='#eef2f7', foreground='#25334a')
+        style.configure('Title.TLabel', font=('Segoe UI', 23, 'bold'))
+        style.configure('Status.TLabel', font=('Segoe UI', 13, 'bold'), padding=12)
+        style.configure('TButton', padding=(12, 7))
+        style.configure('TNotebook.Tab', padding=(22, 10))
+        style.configure('Treeview', rowheight=29)
+        self.events = queue.Queue()
+        self.cancel = threading.Event()
+        self.report = None
+        self.running = False
+        self.source = tk.StringVar()
+        self.output = tk.StringVar()
+        self.case = tk.BooleanVar(value=False)
+        self.state_text = tk.StringVar(value='NOT SCANNED — choose a folder and enter keywords')
+        self.progress_text = tk.StringVar(value='All file processing stays on this computer.')
+        self.protocol('WM_DELETE_WINDOW', self.close)
+        shell = ttk.Frame(self, padding=22)
+        shell.pack(fill='both', expand=True)
+        ttk.Label(shell, text='SafeLoad', style='Title.TLabel').pack(anchor='w')
+        ttk.Label(shell, text='Inspect locally. Remove configured keywords. Review before sharing.').pack(anchor='w', pady=(3, 16))
+        tabs = ttk.Notebook(shell)
+        tabs.pack(fill='x')
+        directory = ttk.Frame(tabs, padding=18)
+        keywords = ttk.Frame(tabs, padding=18)
+        tabs.add(directory, text='1  Directory')
+        tabs.add(keywords, text='2  Keywords')
+        directory.columnconfigure(1, weight=1)
+        ttk.Label(directory, text='Source folder').grid(row=0, column=0, sticky='w', padx=(0, 16))
+        self.source_entry = ttk.Entry(directory, textvariable=self.source)
+        self.source_entry.grid(row=0, column=1, sticky='ew', pady=5)
+        self.browse_source = ttk.Button(directory, text='Browse…', command=self.choose_source)
+        self.browse_source.grid(row=0, column=2, padx=(10, 0))
+        ttk.Label(directory, text='Cleaned folder (new)').grid(row=1, column=0, sticky='w', padx=(0, 16))
+        self.output_entry = ttk.Entry(directory, textvariable=self.output)
+        self.output_entry.grid(row=1, column=1, sticky='ew', pady=5)
+        self.browse_output = ttk.Button(directory, text='Choose parent…', command=self.choose_output)
+        self.browse_output.grid(row=1, column=2, padx=(10, 0))
+        ttk.Label(directory, text='Subfolders included. Originals preserved. Unsupported files copied and flagged for review.').grid(
+            row=2, column=0, columnspan=3, sticky='w', pady=(12, 0))
+        ttk.Label(keywords, text='Keywords or phrases, separated by commas').pack(anchor='w')
+        self.keywords = tk.Text(keywords, height=3, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.keywords.pack(fill='x', pady=8)
+        self.case_check = ttk.Checkbutton(keywords, text='Case-sensitive matching', variable=self.case)
+        self.case_check.pack(anchor='w')
+        ttk.Label(keywords, text='Literal substring matches, including inside longer words. Commas separate entries; no regex.').pack(anchor='w', pady=(6, 0))
+        controls = ttk.Frame(shell)
+        controls.pack(fill='x', pady=14)
+        self.scan_button = ttk.Button(controls, text='Scan folder', command=lambda: self.start(False))
+        self.scan_button.pack(side='left')
+        self.clean_button = ttk.Button(controls, text='Remove keywords into cleaned folder', command=lambda: self.start(True))
+        self.clean_button.pack(side='left', padx=8)
+        self.stop_button = ttk.Button(controls, text='Cancel', command=self.cancel.set, state='disabled')
+        self.stop_button.pack(side='left')
+        self.export_button = ttk.Button(controls, text='Save report…', command=self.export, state='disabled')
+        self.export_button.pack(side='right')
+        self.status = ttk.Label(shell, textvariable=self.state_text, style='Status.TLabel')
+        self.status.pack(fill='x')
+        ttk.Label(shell, textvariable=self.progress_text).pack(anchor='w', pady=(8, 6))
+        self.bar = ttk.Progressbar(shell, mode='indeterminate')
+        self.bar.pack(fill='x', pady=(0, 12))
+        panes = ttk.Panedwindow(shell, orient='horizontal')
+        panes.pack(fill='both', expand=True)
+        listing = ttk.Frame(panes)
+        details = ttk.Frame(panes)
+        panes.add(listing, weight=3)
+        panes.add(details, weight=2)
+        self.table = ttk.Treeview(listing, columns=('status', 'path', 'matches', 'removed'), height=6, show='headings', selectmode='browse')
+        for name, title, width in [('status', 'Status', 90), ('path', 'File / folder', 310),
+                                   ('matches', 'Found', 55), ('removed', 'Removed*', 75)]:
+            self.table.heading(name, text=title)
+            self.table.column(name, width=width, minwidth=45, stretch=name == 'path')
+        scroll = ttk.Scrollbar(listing, orient='vertical', command=self.table.yview)
+        horizontal = ttk.Scrollbar(listing, orient='horizontal', command=self.table.xview)
+        self.table.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
+        self.table.grid(row=0, column=0, sticky='nsew')
+        scroll.grid(row=0, column=1, sticky='ns')
+        horizontal.grid(row=1, column=0, sticky='ew')
+        listing.rowconfigure(0, weight=1)
+        listing.columnconfigure(0, weight=1)
+        self.table.tag_configure('MATCH', foreground='#a61b29', background='#fff0f0')
+        self.table.tag_configure('REVIEW', foreground='#8b4300', background='#fff4de')
+        self.table.tag_configure('CLEAN', foreground='#11633a')
+        self.table.bind('<<TreeviewSelect>>', self.show_details)
+        self.detail = tk.Text(details, width=34, height=6, wrap='word', state='disabled',
+                              font=('Segoe UI', 10), padx=12, pady=10, relief='flat')
+        detail_scroll = ttk.Scrollbar(details, command=self.detail.yview)
+        self.detail.configure(yscrollcommand=detail_scroll.set)
+        detail_scroll.pack(side='right', fill='y')
+        self.detail.pack(fill='both', expand=True)
+        ttk.Label(shell, wraplength=min(1000, width - 60), text='Safe = no configured keyword matches in inspected text, within documented format limits. '
+                  'Not a security certification.\nImages, encrypted/legacy files and other uninspected content prevent Safe. '
+                  'Removal can change code, formulas and document layout.').pack(before=panes, side='bottom', fill='x', pady=(12, 0))
+        self.after(100, self.poll)
+        for variable in (self.source, self.output, self.case):
+            variable.trace_add('write', self.invalidate)
+        self.keywords.bind('<<Modified>>', self.keywords_modified)
+
+    def invalidate(self, *_):
+        if self.running or not self.report:
+            return
+        self.report = None
+        self.state_text.set('NOT SCANNED — settings changed; scan again')
+        self.status.configure(foreground='#25334a')
+        self.export_button.configure(state='disabled')
+        self.table.delete(*self.table.get_children())
+        self.set_details('Scan again to check the current folder and keywords.')
+
+    def keywords_modified(self, _=None):
+        if self.keywords.edit_modified():
+            self.invalidate()
+            self.keywords.edit_modified(False)
+
+    def choose_source(self):
+        path = filedialog.askdirectory(title='Choose source folder')
+        if path:
+            self.source.set(path)
+            self.output.set(str(Path(path).parent / self.output_name(Path(path).name)))
+
+    def output_name(self, name):
+        return name + '-cleaned-' + datetime.now().strftime('%Y%m%d-%H%M%S')
+
+    def choose_output(self):
+        parent = filedialog.askdirectory(title='Choose parent for a NEW cleaned folder')
+        if parent:
+            self.output.set(str(Path(parent) / self.output_name(Path(self.source.get()).name or 'folder')))
+
+    def start(self, clean):
+        if self.running:
+            return
+        try:
+            keys = Keywords(self.keywords.get('1.0', 'end'), self.case.get())
+            if not self.source.get().strip():
+                raise ValueError('Choose a source folder.')
+            if clean and not self.output.get().strip():
+                raise ValueError('Choose a new cleaned folder.')
+        except ValueError as exc:
+            messagebox.showerror('Cannot start', str(exc))
+            return
+        self.report = None
+        self.running = True
+        self.cancel.clear()
+        self.table.delete(*self.table.get_children())
+        self.set_details('Select a file to inspect match locations and review reasons.')
+        self.state_text.set('SCANNING — no safety result yet')
+        self.status.configure(foreground='#25334a')
+        for control in (self.scan_button, self.clean_button, self.export_button,
+                        self.source_entry, self.output_entry, self.browse_source,
+                        self.browse_output, self.case_check):
+            control.configure(state='disabled')
+        self.keywords.configure(state='disabled')
+        self.stop_button.configure(state='normal')
+        self.bar.start(12)
+        source, output = self.source.get(), self.output.get() if clean else None
+
+        def work():
+            try:
+                report = scan_folder(source, keys, output, self.cancel,
+                                     lambda n, p: self.events.put(('progress', (n, p))))
+                self.events.put(('done', report))
+            except Exception as exc:
+                self.events.put(('error', f'{type(exc).__name__}: {exc}'))
+        threading.Thread(target=work, daemon=True).start()
+
+    def poll(self):
+        latest = None
+        while True:
+            try:
+                kind, value = self.events.get_nowait()
+            except queue.Empty:
+                break
+            if kind == 'progress':
+                latest = value
+            else:
+                latest = None
+                self.finish(kind, value)
+        if latest:
+            self.progress_text.set(f'Inspected {latest[0]} files · {latest[1]}')
+        self.after(100, self.poll)
+
+    def finish(self, kind, value):
+        self.running = False
+        self.bar.stop()
+        for control in (self.scan_button, self.clean_button, self.source_entry,
+                        self.output_entry, self.browse_source, self.browse_output, self.case_check):
+            control.configure(state='normal')
+        self.keywords.configure(state='normal')
+        self.stop_button.configure(state='disabled')
+        if kind == 'error':
+            self.state_text.set('NOT SAFE — scan failed or incomplete')
+            self.status.configure(foreground='#a61b29')
+            self.progress_text.set(value)
+            messagebox.showerror('Scan failed', value)
+            return
+        self.report = value
+        self.export_button.configure(state='normal')
+        target = 'Cleaned folder' if value.output else 'Source folder'
+        state = 'SAFE — no configured keyword matches in inspected text' if value.safe else 'NOT SAFE — matches remain or review required'
+        if value.cancelled:
+            state = 'NOT SAFE — cancelled; results and cleaned folder are incomplete'
+        self.state_text.set(state)
+        self.status.configure(foreground='#11633a' if value.safe else '#a61b29')
+        matches = sum(bool(f.remaining) for f in value.files)
+        reviews = sum(bool(f.issues) for f in value.files)
+        changed = sum(f.changed for f in value.files)
+        self.progress_text.set(f'{target} · {len(value.files)} files · {matches} with matches · '
+                               f'{reviews} need review · {changed} changed')
+        for i, item in enumerate(value.files):
+            found = sum(h.count for h in item.found)
+            left = sum(h.count for h in item.remaining)
+            self.table.insert('', 'end', iid=str(i), values=(item.status, item.path, found,
+                              max(0, found-left) if item.changed else 0), tags=(item.status,))
+        for i, issue in enumerate(value.issues):
+            self.table.insert('', 'end', iid=f'issue-{i}', values=('REVIEW', issue, '', ''), tags=('REVIEW',))
+        self.set_details(('Result applies to:\n' + (value.output or value.source)) +
+                         '\n\nSelect a file for locations.\n\n*Removed counts are verified decreases in '
+                         'match counts, not counts of deleted characters.\n\nReports may contain sensitive paths. '
+                         'Keywords appear as numbers to avoid repeating their contents.')
+
+    def set_details(self, text):
+        self.detail.configure(state='normal')
+        self.detail.delete('1.0', 'end')
+        self.detail.insert('1.0', text)
+        self.detail.configure(state='disabled')
+
+    def show_details(self, _=None):
+        selection = self.table.selection()
+        if not selection or not self.report:
+            return
+        key = selection[0]
+        if key.startswith('issue-'):
+            self.set_details(self.report.issues[int(key.split('-')[1])])
+            return
+        item = self.report.files[int(key)]
+        lines = [item.path, '', 'Status: ' + item.status,
+                 'File changed: ' + ('Yes' if item.changed else 'No')]
+        for title, hits in [('Originally found', item.found), ('Remaining after verification', item.remaining)]:
+            lines.extend(['', title + ':'])
+            lines.extend(f'Keyword #{h.keyword} · {h.location} · {h.count} match(es)' for h in hits)
+            if not hits:
+                lines.append('None in inspected text.')
+        if item.issues:
+            lines.extend(['', 'Manual review required:'] + item.issues)
+        self.set_details('\n'.join(lines))
+
+    def export(self):
+        if not self.report:
+            return
+        path = filedialog.asksaveasfilename(title='Save local report outside scanned folders',
+                                          defaultextension='.json', initialfile='keyword-report.json',
+                                          filetypes=[('JSON report', '*.json')])
+        if path:
+            try:
+                target = Path(path).resolve()
+                for folder in (self.report.source, self.report.output):
+                    if folder and (target == Path(folder) or Path(folder) in target.parents):
+                        raise ValueError('Save reports outside source and cleaned folders; reports can contain sensitive paths.')
+                self.report.save(target)
+            except Exception as exc:
+                messagebox.showerror('Cannot save report', str(exc))
+
+    def close(self):
+        if self.running:
+            self.cancel.set()
+            self.state_text.set('CANCELLING — waiting for current file; folder is not verified')
+            self.after(150, self.wait_close)
+        else:
+            self.destroy()
+
+    def wait_close(self):
+        if self.running:
+            self.after(150, self.wait_close)
+        else:
+            self.destroy()
+
+
+if __name__ == '__main__':
+    App().mainloop()
