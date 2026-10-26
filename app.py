@@ -1,6 +1,8 @@
 """Two-tab, offline desktop interface for keyword inspection."""
 from pathlib import Path
 import os
+import json
+import tempfile
 import queue
 import threading
 import tkinter as tk
@@ -10,12 +12,14 @@ from scanner import Keywords, scan_folder
 
 
 class App(tk.Tk):
-    def __init__(self):
+    def __init__(self, settings_path=None):
         super().__init__()
         icon = Path(__file__).resolve().parent / 'assets' / 'app.ico'
         if os.name == 'nt' and icon.is_file():
             self.iconbitmap(default=str(icon))
         self.title('SafeLoad | Offline Keyword Scanner')
+        self.settings_path = Path(settings_path) if settings_path is not None else (
+            Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'SafeLoad' / 'settings.json')
         width = min(1120, self.winfo_screenwidth() - 50)
         height = min(780, self.winfo_screenheight() - 100)
         self.geometry(f'{width}x{height}')
@@ -110,10 +114,42 @@ class App(tk.Tk):
         self.detail.pack(fill='both', expand=True)
         ttk.Label(shell, wraplength=min(1000, width - 60), text='Safe = no configured keyword matches in inspected text, within documented format limits. '
                   'Not a security certification.\nOK = no keyword match. Failed = keyword match. Not Scanned = unable to check the file.').pack(before=panes, side='bottom', fill='x', pady=(8, 0))
+        self.load_settings()
         self.after(100, self.poll)
         for variable in (self.source, self.case):
             variable.trace_add('write', self.invalidate)
         self.keywords.bind('<<Modified>>', self.keywords_modified)
+
+    def load_settings(self):
+        try:
+            settings = json.loads(self.settings_path.read_text(encoding='utf-8'))
+            if not isinstance(settings, dict) or not isinstance(settings.get('keywords'), str):
+                raise ValueError('Invalid saved settings.')
+            self.keywords.insert('1.0', settings['keywords'])
+            self.case.set(settings.get('case_sensitive') is True)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError):
+            self.progress_text.set('Saved Keywords Could Not Be Loaded. Enter Them Again.')
+
+    def save_settings(self):
+        temporary = None
+        try:
+            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+            settings = {'keywords': self.keywords.get('1.0', 'end-1c'),
+                        'case_sensitive': self.case.get()}
+            handle, temporary = tempfile.mkstemp(prefix='.settings-', dir=self.settings_path.parent)
+            with os.fdopen(handle, 'w', encoding='utf-8') as stream:
+                json.dump(settings, stream, ensure_ascii=False, indent=2)
+            os.replace(temporary, self.settings_path)
+            return True
+        except OSError as exc:
+            messagebox.showerror('Cannot Save Keywords',
+                                 f'Keywords could not be saved locally: {exc}')
+            return False
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
 
     def invalidate(self, *_):
         if self.running or not self.report:
@@ -144,6 +180,8 @@ class App(tk.Tk):
                 raise ValueError('Choose a source folder.')
         except ValueError as exc:
             messagebox.showerror('Cannot Start', str(exc))
+            return
+        if not self.save_settings():
             return
         self.report = None
         self.running = True
@@ -271,6 +309,8 @@ class App(tk.Tk):
                 messagebox.showerror('Cannot Save Report', str(exc))
 
     def close(self):
+        if not self.save_settings():
+            return
         if self.running:
             self.cancel.set()
             self.state_text.set('Cancelling — Waiting For Current File; Folder Is Not Verified')

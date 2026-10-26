@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import tempfile
 import time
 import unittest
@@ -7,7 +8,15 @@ from app import App
 from scanner import FileResult, Hit, Report
 
 
+def make_app():
+    base = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
+    base.mkdir(parents=True, exist_ok=True)
+    state = Path(tempfile.mkdtemp(dir=base)) / 'settings.json'
+    return App(settings_path=state)
+
+
 def close_app(app):
+    app.update()
     for callback in app.tk.call('after', 'info'):
         app.after_cancel(callback)
     app.destroy()
@@ -21,7 +30,7 @@ class DesktopTests(unittest.TestCase):
             root = Path(folder)
             (root / 'a.txt').write_text('Fine')
             (root / 'z.txt').write_text('Secret')
-            app = App()
+            app = make_app()
             app.withdraw()
             try:
                 self.assertFalse(hasattr(app, 'clean_button'))
@@ -63,7 +72,7 @@ class DesktopTests(unittest.TestCase):
 
 class ResultLayoutTests(unittest.TestCase):
     def test_status_sequence_including_folder_errors(self):
-        app = App()
+        app = make_app()
         app.withdraw()
         try:
             report = Report('C:/example', 'test', files=[
@@ -78,7 +87,7 @@ class ResultLayoutTests(unittest.TestCase):
             close_app(app)
 
     def test_compact_tabs_leave_room_for_results(self):
-        app = App()
+        app = make_app()
         try:
             app.geometry('1000x660')
             app.update()
@@ -97,6 +106,46 @@ class ResultLayoutTests(unittest.TestCase):
                 self.assertGreater(app.table.winfo_height(), 160)
         finally:
             close_app(app)
+
+
+class KeywordSettingsTests(unittest.TestCase):
+    def test_keywords_survive_close_and_reopen(self):
+        base = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as directory:
+            path = Path(directory) / 'settings.json'
+            app = App(settings_path=path)
+            app.withdraw()
+            text = '  alpha, beta, project key  '
+            app.keywords.insert('1.0', text)
+            app.case.set(True)
+            app.update()
+            for callback in app.tk.call('after', 'info'):
+                app.after_cancel(callback)
+            app.close()
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')),
+                             {'keywords': text, 'case_sensitive': True})
+            reopened = App(settings_path=path)
+            reopened.withdraw()
+            try:
+                self.assertEqual(reopened.keywords.get('1.0', 'end-1c'), text)
+                self.assertTrue(reopened.case.get())
+            finally:
+                close_app(reopened)
+
+    def test_invalid_settings_do_not_prevent_startup(self):
+        base = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as directory:
+            path = Path(directory) / 'settings.json'
+            path.write_text('{bad json', encoding='utf-8')
+            app = App(settings_path=path)
+            app.withdraw()
+            try:
+                self.assertEqual(app.keywords.get('1.0', 'end-1c'), '')
+                self.assertIn('Could Not Be Loaded', app.progress_text.get())
+            finally:
+                close_app(app)
 
 
 if __name__ == '__main__':

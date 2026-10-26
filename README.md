@@ -27,12 +27,14 @@ Alternatively extract the **entire** ZIP and open `SafeLoad\SafeLoad.exe` withou
 ## Use
 
 1. In **Directory**, choose the source folder. All subfolders and hidden files are visited. Links/junctions are flagged rather than followed.
-2. In **Keywords**, enter comma-separated words or phrases. Matching is literal and case-insensitive by default, including inside longer words. Spaces before and after commas are trimmed. Empty entries and exact duplicates are ignored. Commas cannot be part of a keyword. Use **Case-Sensitive Matching** when needed.
+2. In **Keywords**, enter comma-separated words or phrases. Matching is literal and case-insensitive by default, including inside longer words. Spaces before and after commas are trimmed. Empty entries and exact duplicates are ignored. Commas cannot be part of a keyword. Use **Case-Sensitive Matching** when needed. Keywords and this option are saved locally when scanning or closing and restored on startup.
 3. Select **Scan Folder**. The list shows keyword matches first, **Not Scanned** files next, and **OK** files last. All **Failed** entries are highlighted. Select an entry to see keyword numbers, locations and inspection issues.
 4. Resolve files manually and select **Scan Folder** again. No automatic cleanup is available.
 5. Optionally select **Save Report** to save JSON outside the source directory. Reports omit keyword values and file excerpts; paths and parser error messages may still contain sensitive information. Keyword numbers follow the unique entries in the Keywords tab.
 
 **OK** means no configured keyword matches were found in inspected text. **Failed** means a keyword matched. Format limitations and scan notes do not cause Failed. **Not Scanned** means an error prevented the file from being checked; the reason is shown separately. Folder **Safe** requires every file to be OK and the scan to finish without errors. Empty, cancelled or incomplete scans never receive Safe. This checks configured keywords; it is not a security certification or approval to upload. Keep source files unchanged during scans; the result describes the scan snapshot.
+
+Saved keyword settings live in `%LOCALAPPDATA%\SafeLoad\settings.json`, separate from the installed version and scanned folders. Updates retain them. These settings contain your configured keywords and are never uploaded by SafeLoad.
 
 ## Inspection Coverage
 
