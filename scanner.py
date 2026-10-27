@@ -505,9 +505,8 @@ def merge(total, extra):
         total[word] = total.get(word, 0) + number
 
 
-def safe_text(data, plan):
-    bom, codec = next(((b, c) for b, c in BOMS if data.startswith(b)), (b'', 'utf-8'))
-    text, _ = decode_text(data)
+def safe_string(text, plan):
+    """Remove lines containing clean keywords, then reverse reverse keywords: (new text, reversed, removed)."""
     reversed_counts, removed = {}, {}
     new = text
     if plan.clean:
@@ -516,6 +515,40 @@ def safe_text(data, plan):
     if plan.reverse:
         new, counts = plan.reverse.reverse(new)
         reversed_counts = by_word(plan.reverse, counts)
+    return new, reversed_counts, removed
+
+
+@dataclass
+class TextScan:
+    hits: list[Hit]
+    spans: list[tuple[int, int]]  # non-overlapping match ranges, for highlighting
+
+    @property
+    def safe(self):
+        return not self.hits
+
+
+def scan_text(text, keys):
+    """Keyword check of pasted text: one Hit per keyword and line, plus the matched character ranges."""
+    counts = {}
+    for index, start, _ in keys.ranges(text):
+        key = (index, text.count('\n', 0, start) + 1)
+        counts[key] = counts.get(key, 0) + 1
+    hits = [Hit(index, f'Line {line}', number, keys.words[index - 1])
+            for (index, line), number in sorted(counts.items(), key=lambda item: (item[0][1], item[0][0]))]
+    return TextScan(hits, [(a, b) for _, a, b in keys.matches(text)])
+
+
+def make_safe_text(text, plan):
+    """MakeItSafe for pasted text: (new text, reversed counts, removed counts, scan of what is left)."""
+    new, reversed_counts, removed = safe_string(text, plan)
+    return new, reversed_counts, removed, scan_text(new, plan.check)
+
+
+def safe_text(data, plan):
+    bom, codec = next(((b, c) for b, c in BOMS if data.startswith(b)), (b'', 'utf-8'))
+    text, _ = decode_text(data)
+    new, reversed_counts, removed = safe_string(text, plan)
     if new == text:
         return None, reversed_counts, removed, []
     left = Inspection()

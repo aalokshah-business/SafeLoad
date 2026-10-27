@@ -8,7 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from scanner import Keywords, Plan, make_safe_folder, scan_folder
+from scanner import Keywords, Plan, make_safe_folder, make_safe_text, scan_folder, scan_text
 
 
 class App(tk.Tk):
@@ -43,6 +43,8 @@ class App(tk.Tk):
         self.source = tk.StringVar()
         self.case = tk.BooleanVar(value=False)
         self.safe_case = tk.BooleanVar(value=False)
+        self.view = 'files'
+        self.view_details = {'files': '', 'raw': 'Paste or type text on the left, then scan it or make it safe.'}
         self.state_text = tk.StringVar(value='Not Scanned — Choose A Folder Or File And Enter Keywords')
         self.progress_text = tk.StringVar(value='All file processing stays on this computer.')
         self.protocol('WM_DELETE_WINDOW', self.close)
@@ -58,6 +60,8 @@ class App(tk.Tk):
         tabs.add(keywords, text='2  Keywords')
         makesafe = ttk.Frame(tabs, padding=(12, 8))
         tabs.add(makesafe, text='3  MakeItSafe')
+        rawtab = ttk.Frame(tabs, padding=(12, 8))
+        tabs.add(rawtab, text='4  Raw Text')
         directory.columnconfigure(1, weight=1)
         ttk.Label(directory, text='Folder Or File').grid(row=0, column=0, sticky='w', padx=(0, 16))
         self.source_entry = ttk.Entry(directory, textvariable=self.source)
@@ -90,6 +94,19 @@ class App(tk.Tk):
         self.safe_case_check = ttk.Checkbutton(safe_row, text='Case-Sensitive Matching', variable=self.safe_case)
         self.safe_case_check.pack(side='left', padx=(0, 12))
         ttk.Label(safe_row, text='Uses the folder or file from tab 1. The button below becomes MakeItSafe Folder or MakeItSafe File. Lines are removed first, then matches reversed.').pack(side='left')
+        raw_row = ttk.Frame(rawtab)
+        raw_row.pack(fill='x')
+        self.raw_paste_button = ttk.Button(raw_row, text='Paste From Clipboard', command=self.raw_paste)
+        self.raw_paste_button.pack(side='left')
+        self.raw_safe_button = ttk.Button(raw_row, text='MakeItSafe Text', command=self.raw_make_safe)
+        self.raw_safe_button.pack(side='left', padx=8)
+        self.raw_copy_button = ttk.Button(raw_row, text='Copy Text', command=self.raw_copy)
+        self.raw_copy_button.pack(side='left')
+        self.raw_clear_button = ttk.Button(raw_row, text='Clear', command=self.raw_clear)
+        self.raw_clear_button.pack(side='left', padx=8)
+        ttk.Label(rawtab, text='Scan Text (button below) uses the keywords from tab 2. MakeItSafe Text uses the boxes in tab 3 '
+                  'and rewrites the text here; Ctrl+Z undoes it. Nothing is saved or sent anywhere.',
+                  wraplength=800).pack(anchor='w', pady=(6, 0))
         controls = ttk.Frame(shell)
         controls.pack(fill='x', pady=8)
         self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.act)
@@ -103,12 +120,21 @@ class App(tk.Tk):
         ttk.Label(shell, textvariable=self.progress_text).pack(anchor='w', pady=(4, 4))
         self.bar = ttk.Progressbar(shell, mode='indeterminate')
         self.bar.pack(fill='x', pady=(0, 8))
-        panes = ttk.Panedwindow(shell, orient='horizontal')
+        self.panes = panes = ttk.Panedwindow(shell, orient='horizontal')
         panes.pack(fill='both', expand=True)
-        listing = ttk.Frame(panes)
+        self.listing = listing = ttk.Frame(panes)
         details = ttk.Frame(panes)
         panes.add(listing, weight=3)
         panes.add(details, weight=2)
+        self.raw_frame = ttk.Frame(panes)
+        self.raw_text = tk.Text(self.raw_frame, wrap='word', undo=True, maxundo=-1, font=('Consolas', 10),
+                                relief='solid', bd=1, padx=8, pady=6)
+        raw_scroll = ttk.Scrollbar(self.raw_frame, command=self.raw_text.yview)
+        self.raw_text.configure(yscrollcommand=raw_scroll.set)
+        raw_scroll.pack(side='right', fill='y')
+        self.raw_text.pack(fill='both', expand=True)
+        self.raw_text.tag_configure('hit', background='#ffd6d6', foreground='#a61b29')
+        self.raw_text.bind('<<Modified>>', self.raw_modified)
         self.table = ttk.Treeview(listing, columns=('status', 'path', 'matches', 'keywords'), height=6, show='headings', selectmode='browse')
         for name, title, column_width in [('status', 'Status', 110), ('path', 'File', 390),
                                    ('matches', 'Matches', 65), ('keywords', 'Keywords', 150)]:
@@ -249,22 +275,154 @@ class App(tk.Tk):
     def lock(self, busy):
         state = 'disabled' if busy else 'normal'
         for control in (self.scan_button, self.source_entry, self.browse_source, self.browse_file,
-                        self.case_check, self.safe_case_check, self.keywords, self.safe_keywords, self.safe_clean):
+                        self.case_check, self.safe_case_check, self.keywords, self.safe_keywords, self.safe_clean,
+                        self.raw_paste_button, self.raw_safe_button, self.raw_copy_button, self.raw_clear_button):
             control.configure(state=state)
+        self.raw_text.configure(state=state)
         self.tab_changed()
 
     def making_safe(self):
         return self.tabs.index(self.tabs.select()) == 2
 
+    def raw_mode(self):
+        return self.tabs.index(self.tabs.select()) == 3
+
     def tab_changed(self, *_):
-        """One action button: Scan Folder on tabs 1 and 2, MakeItSafe Folder on tab 3."""
+        """One action button: Scan Folder on tabs 1 and 2, MakeItSafe Folder on tab 3, Scan Text on tab 4."""
+        raw = self.raw_mode()
         if not self.running:
             path = self.source.get().strip()
             noun = 'File' if path and Path(path).is_file() else 'Folder'
-            self.scan_button.configure(text=('MakeItSafe ' if self.making_safe() else 'Scan ') + noun)
+            if raw:
+                self.scan_button.configure(text='Scan Text')
+            else:
+                self.scan_button.configure(text=('MakeItSafe ' if self.making_safe() else 'Scan ') + noun)
+            reports = self.safe_report or self.report
+            self.export_button.configure(state='normal' if reports and not raw else 'disabled')
+        view = 'raw' if raw else 'files'
+        if view != self.view:  # swap the result list for the paste box, keeping each side's details text
+            self.view_details[self.view] = self.detail.get('1.0', 'end-1c')
+            if raw:
+                self.panes.forget(self.listing)
+                self.panes.insert(0, self.raw_frame, weight=3)
+            else:
+                self.panes.forget(self.raw_frame)
+                self.panes.insert(0, self.listing, weight=3)
+            self.view = view
+            self.set_details(self.view_details[view])
 
     def act(self):
-        self.start_safe() if self.making_safe() else self.start()
+        if self.raw_mode():
+            self.raw_scan()
+        elif self.making_safe():
+            self.start_safe()
+        else:
+            self.start()
+
+    def raw_content(self):
+        return self.raw_text.get('1.0', 'end-1c')
+
+    def raw_modified(self, _=None):
+        if self.raw_text.edit_modified():
+            self.raw_text.tag_remove('hit', '1.0', 'end')
+            self.raw_text.edit_modified(False)
+
+    def raw_highlight(self, spans):
+        self.raw_text.tag_remove('hit', '1.0', 'end')
+        for start, end in spans:
+            self.raw_text.tag_add('hit', f'1.0+{start}c', f'1.0+{end}c')
+        self.raw_text.edit_modified(False)
+
+    def raw_replace(self, text):
+        """Swap the whole text as one undo step."""
+        box = self.raw_text
+        box.edit_separator()
+        box.configure(autoseparators=False)
+        box.delete('1.0', 'end')
+        box.insert('1.0', text)
+        box.configure(autoseparators=True)
+        box.edit_separator()
+        box.edit_modified(False)
+
+    def raw_paste(self):
+        try:
+            text = self.clipboard_get()
+        except tk.TclError:
+            messagebox.showinfo('Clipboard Empty', 'The clipboard holds no text.')
+            return
+        self.raw_replace(text)
+        self.state_text.set('Not Scanned — Text Pasted')
+        self.status.configure(foreground='#25334a')
+        self.progress_text.set(f'{len(text)} characters pasted. Select Scan Text or MakeItSafe Text.')
+
+    def raw_copy(self):
+        self.clipboard_clear()
+        self.clipboard_append(self.raw_content())
+        self.progress_text.set('Text copied to the clipboard.')
+
+    def raw_clear(self):
+        self.raw_replace('')
+        self.state_text.set('Not Scanned — Paste Text And Enter Keywords')
+        self.status.configure(foreground='#25334a')
+        self.set_details(self.view_details['raw'])
+
+    def raw_report(self, scan, text):
+        lines = [f'{text.count(chr(10)) + 1} lines · {len(text)} characters']
+        if scan.hits:
+            lines.extend(['', 'Keyword Matches (highlighted in the text):'])
+            for hit in scan.hits:
+                lines.append(f'Keyword {json.dumps(hit.keyword_text, ensure_ascii=False)} · {hit.location} · {hit.count} match(es)')
+        return lines
+
+    def raw_scan(self):
+        text = self.raw_content()
+        try:
+            keys = Keywords(self.keywords.get('1.0', 'end'), self.case.get())
+            if not text.strip():
+                raise ValueError('Paste or type some text first.')
+            scan = scan_text(text, keys)
+        except ValueError as exc:
+            messagebox.showerror('Cannot Scan Text', str(exc))
+            return
+        if not self.save_settings():
+            return
+        self.raw_highlight(scan.spans)
+        failed = bool(scan.hits)
+        self.state_text.set('Unsafe — Keyword Matches Found' if failed else 'Safe — No Keyword Matches Found')
+        self.status.configure(foreground='#a61b29' if failed else '#11633a')
+        self.progress_text.set(f'{sum(h.count for h in scan.hits)} match(es) in the pasted text.')
+        self.set_details('\n'.join(['Status: ' + ('Failed' if failed else 'OK'),
+                                    'Reason: ' + ('Keyword Match Found.' if failed else 'No Keyword Match Found.'), ''] +
+                                   self.raw_report(scan, text) +
+                                   (['', 'Use the MakeItSafe tab boxes, then MakeItSafe Text, to reverse or remove them.'] if failed else [])))
+
+    def raw_make_safe(self):
+        text = self.raw_content()
+        try:
+            plan = Plan(self.safe_keywords.get('1.0', 'end'), self.safe_clean.get('1.0', 'end'), self.safe_case.get())
+            if not text.strip():
+                raise ValueError('Paste or type some text first.')
+            new, reversed_counts, removed, left = make_safe_text(text, plan)
+        except ValueError as exc:
+            messagebox.showerror('Cannot Make Text Safe', str(exc))
+            return
+        if not self.save_settings():
+            return
+        if new != text:
+            self.raw_replace(new)
+        self.raw_highlight(left.spans)
+        lines = ['Text rewritten in the box (Ctrl+Z undoes it).' if new != text else 'Nothing to change.', '']
+        for word, number in reversed_counts.items():
+            lines.append(f'"{word}" has been replaced with "{word[::-1]}": {number} time(s)')
+        for word, number in removed.items():
+            lines.append(f'Lines containing "{word}" have been removed: {number} line(s)')
+        if left.hits:
+            lines.extend(['', 'Keywords still present (highlighted):'] + [
+                f'Keyword {json.dumps(h.keyword_text, ensure_ascii=False)} · {h.location} · {h.count} match(es)' for h in left.hits])
+        self.state_text.set('MakeItSafe Complete' if not left.hits else 'MakeItSafe Finished — Review Remaining Items')
+        self.status.configure(foreground='#11633a' if not left.hits else '#a61b29')
+        self.progress_text.set(f'{sum(reversed_counts.values())} reversed · {sum(removed.values())} lines removed')
+        self.set_details('\n'.join(lines))
 
     def start_safe(self):
         if self.running:

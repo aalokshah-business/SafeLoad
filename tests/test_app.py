@@ -269,5 +269,39 @@ class KeywordSettingsTests(unittest.TestCase):
                 close_app(app)
 
 
+    def test_raw_text_tab_scans_highlights_and_makes_safe(self):
+        app = make_app()
+        app.withdraw()
+        try:
+            app.keywords.insert('1.0', 'git')
+            app.safe_keywords.insert('1.0', 'git')
+            app.safe_clean.insert('1.0', 'github')
+            app.tabs.select(3)
+            app.update()
+            self.assertEqual(app.scan_button.cget('text'), 'Scan Text')
+            self.assertEqual(str(app.export_button.cget('state')), 'disabled')
+            self.assertIn(str(app.raw_frame), app.panes.panes())
+            self.assertNotIn(str(app.listing), app.panes.panes())
+            app.raw_text.insert('1.0', 'keep git\nsee github here\nlast')
+            app.scan_button.invoke()
+            app.update()
+            self.assertEqual(app.state_text.get(), 'Unsafe — Keyword Matches Found')
+            self.assertEqual(len(app.raw_text.tag_ranges('hit')), 4)
+            self.assertIn('Keyword "git" · Line 1 · 1 match(es)', app.detail.get('1.0', 'end'))
+            app.raw_safe_button.invoke()
+            app.update()
+            self.assertEqual(app.raw_content(), 'keep tig\nlast')
+            self.assertEqual(app.state_text.get(), 'MakeItSafe Complete')
+            self.assertIn('"git" has been replaced with "tig": 1 time(s)', app.detail.get('1.0', 'end'))
+            app.raw_text.edit_undo()
+            self.assertEqual(app.raw_content(), 'keep git\nsee github here\nlast')
+            app.tabs.select(0)
+            app.update()
+            self.assertIn(str(app.listing), app.panes.panes())
+            self.assertEqual(app.scan_button.cget('text'), 'Scan Folder')
+        finally:
+            close_app(app)
+
+
 if __name__ == '__main__':
     unittest.main()

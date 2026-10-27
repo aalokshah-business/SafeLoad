@@ -9,7 +9,7 @@ import zipfile
 
 import pymupdf
 import legacy
-from scanner import Keywords, Plan, inspect_file, make_safe_folder, scan_folder
+from scanner import Keywords, Plan, inspect_file, make_safe_folder, make_safe_text, scan_folder, scan_text
 
 TEST_TMP = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
 TEST_TMP.mkdir(parents=True, exist_ok=True)
@@ -308,6 +308,24 @@ class MakeItSafeTests(unittest.TestCase):
             self.assertEqual((root / 'b.mdc').read_text(), 'const tig = 1\n')
 
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
+
+
+class RawTextTests(unittest.TestCase):
+    def test_scan_text_reports_keyword_line_count_and_spans(self):
+        scan = scan_text('ok\nGit and git\nlast', Keywords('git, nope'))
+        self.assertFalse(scan.safe)
+        self.assertEqual([(h.keyword_text, h.location, h.count) for h in scan.hits], [('git', 'Line 2', 2)])
+        self.assertEqual(scan.spans, [(3, 6), (11, 14)])
+        self.assertTrue(scan_text('clean', Keywords('git')).safe)
+
+    def test_make_safe_text_removes_lines_then_reverses(self):
+        text = 'keep git\nsee github here\nbusiness\n'
+        new, reversed_counts, removed, left = make_safe_text(text, Plan('git, business', 'github'))
+        self.assertEqual(new, 'keep tig\nssenisub\n')
+        self.assertEqual((reversed_counts, removed), ({'git': 1, 'business': 1}, {'github': 1}))
+        self.assertTrue(left.safe)
+        new, _, _, left = make_safe_text('git tig', Plan('git, tig'))
+        self.assertFalse(left.safe)
 
 
 class SingleFileTests(unittest.TestCase):
