@@ -185,21 +185,34 @@ class KeywordSettingsTests(unittest.TestCase):
             app = make_app()
             app.withdraw()
             try:
-                self.assertEqual(app.safe_button.cget('text'), 'MakeItSafe Folder')
+                self.assertFalse(hasattr(app, 'safe_button'))
+                self.assertEqual(app.scan_button.cget('text'), 'Scan Folder')
+                app.tabs.select(2)
+                app.update()
+                self.assertEqual(app.scan_button.cget('text'), 'MakeItSafe Folder')
                 app.source.set(str(root))
                 app.safe_keywords.insert('1.0', 'git, business')
                 app.safe_clean.insert('1.0', 'github')
                 app.update()
                 with patch('app.messagebox.askyesno', return_value=False):
-                    app.safe_button.invoke()
+                    app.scan_button.invoke()
                 self.assertEqual((root / 'a.txt').read_text(), 'git and business and git\nsee github here\nend')
                 with patch('app.messagebox.askyesno', return_value=True):
-                    app.safe_button.invoke()
+                    app.scan_button.invoke()
                 deadline = time.monotonic() + 10
                 while app.running and time.monotonic() < deadline:
                     app.update()
                     time.sleep(.01)
                 self.assertFalse(app.running)
+                self.assertEqual(app.scan_button.cget('text'), 'MakeItSafe Folder')
+                app.tabs.select(0)
+                app.update()
+                self.assertEqual(app.scan_button.cget('text'), 'Scan Folder')
+                app.tabs.select(1)
+                app.update()
+                self.assertEqual(str(app.scan_button.cget('state')), 'normal')
+                app.tabs.select(2)
+                app.update()
                 self.assertEqual((root / 'a.txt').read_text(), 'tig and ssenisub and tig\nend')
                 rows = [app.table.item(i, 'values') for i in app.table.get_children()]
                 self.assertEqual(rows[0][:2], ('Processed', 'a.txt'))

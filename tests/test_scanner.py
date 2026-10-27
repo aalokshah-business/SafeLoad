@@ -273,3 +273,35 @@ class MakeItSafeTests(unittest.TestCase):
             self.assertIn('rId3', links)
             self.assertEqual(item.removed['github'], 4)
             self.assertTrue(any('still present' in i for i in item.issues))
+
+    def test_pdf_lines_removed_and_matches_reversed(self):
+        document = pymupdf.open()
+        page = document.new_page()
+        page.insert_text((72, 72), 'keep git and business here', fontsize=12)
+        page.insert_text((72, 100), 'see GitHub now', fontsize=12)
+        page.insert_text((72, 130), 'last line stays', fontsize=12)
+        document.set_metadata({'title': 'My git doc'})
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'a.pdf').write_bytes(document.tobytes())
+            plan = Plan('git, business', 'github')
+            report = make_safe_folder(root, plan)
+            item = report.files[0]
+            self.assertEqual((item.status, item.replaced, item.removed),
+                             ('Processed', {'git': 2, 'business': 1}, {'github': 1}))
+            with pymupdf.open(root / 'a.pdf') as result:
+                text = result[0].get_text()
+                self.assertEqual(result.metadata['title'], 'My tig doc')
+            self.assertIn('last line stays', text)
+            self.assertNotIn('GitHub', text)
+            self.assertIn('ssenisub', text)
+            self.assertFalse([h for f in scan_folder(root, plan.check).files for h in f.found])
+
+    def test_modern_script_and_rule_files_are_processed(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            for name in ('a.mjs', 'b.mdc', 'c.cjs'):
+                (root / name).write_text('const git = 1\nsee github\n')
+            report = make_safe_folder(root, Plan('git', 'github'))
+            self.assertEqual({f.status for f in report.files}, {'Processed'})
+            self.assertEqual((root / 'b.mdc').read_text(), 'const tig = 1\n')

@@ -50,7 +50,7 @@ class App(tk.Tk):
         shell.pack(fill='both', expand=True)
         ttk.Label(shell, text='SafeLoad', style='Title.TLabel').pack(anchor='w')
         ttk.Label(shell, text='Scan Folders For Keywords. Review File Status.').pack(anchor='w', pady=(2, 10))
-        tabs = ttk.Notebook(shell)
+        self.tabs = tabs = ttk.Notebook(shell)
         tabs.pack(fill='x')
         directory = ttk.Frame(tabs, padding=(12, 8))
         keywords = ttk.Frame(tabs, padding=(12, 8))
@@ -84,14 +84,12 @@ class App(tk.Tk):
         self.safe_clean.grid(row=1, column=1, sticky='ew', pady=4, padx=(12, 0))
         safe_row = ttk.Frame(makesafe)
         safe_row.grid(row=2, column=0, columnspan=2, sticky='ew')
-        self.safe_button = ttk.Button(safe_row, text='MakeItSafe Folder', command=self.start_safe)
-        self.safe_button.pack(side='left')
         self.safe_case_check = ttk.Checkbutton(safe_row, text='Case-Sensitive Matching', variable=self.safe_case)
-        self.safe_case_check.pack(side='left', padx=12)
-        ttk.Label(safe_row, text='Uses the folder from tab 1. Rewrites files in place. Lines are removed first, then matches reversed.').pack(side='left')
+        self.safe_case_check.pack(side='left', padx=(0, 12))
+        ttk.Label(safe_row, text='Uses the folder from tab 1. The button below becomes MakeItSafe Folder. Lines are removed first, then matches reversed.').pack(side='left')
         controls = ttk.Frame(shell)
         controls.pack(fill='x', pady=8)
-        self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.start)
+        self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.act)
         self.scan_button.pack(side='left')
         self.stop_button = ttk.Button(controls, text='Cancel', command=self.cancel.set, state='disabled')
         self.stop_button.pack(side='left', padx=8)
@@ -142,6 +140,7 @@ class App(tk.Tk):
         for variable in (self.source, self.case):
             variable.trace_add('write', self.invalidate)
         self.keywords.bind('<<Modified>>', self.keywords_modified)
+        tabs.bind('<<NotebookTabChanged>>', self.tab_changed)
 
     def load_settings(self):
         try:
@@ -240,9 +239,21 @@ class App(tk.Tk):
 
     def lock(self, busy):
         state = 'disabled' if busy else 'normal'
-        for control in (self.scan_button, self.safe_button, self.source_entry, self.browse_source,
+        for control in (self.scan_button, self.source_entry, self.browse_source,
                         self.case_check, self.safe_case_check, self.keywords, self.safe_keywords, self.safe_clean):
             control.configure(state=state)
+        self.tab_changed()
+
+    def making_safe(self):
+        return self.tabs.index(self.tabs.select()) == 2
+
+    def tab_changed(self, _=None):
+        """One action button: Scan Folder on tabs 1 and 2, MakeItSafe Folder on tab 3."""
+        if not self.running:
+            self.scan_button.configure(text='MakeItSafe Folder' if self.making_safe() else 'Scan Folder')
+
+    def act(self):
+        self.start_safe() if self.making_safe() else self.start()
 
     def start_safe(self):
         if self.running:

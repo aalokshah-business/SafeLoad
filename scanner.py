@@ -26,7 +26,9 @@ TEXT_EXTENSIONS = set((
     '.txt .md .rst .csv .tsv .json .jsonl .xml .yaml .yml .toml .ini .cfg '
     '.conf .log .sql .py .pyw .js .jsx .ts .tsx .html .htm .css .scss .less '
     '.c .h .cpp .hpp .cs .java .kt .go .rs .rb .php .sh .bat .cmd .ps1 '
-    '.r .swift .vue .svelte .env .properties .tex .ipynb .gitignore'
+    '.r .swift .vue .svelte .env .properties .tex .ipynb .gitignore '
+    '.mjs .cjs .mts .cts .mdc .mdx .markdown .svg .gradle .kts .lock .xhtml .plist '
+    '.csproj .sln .editorconfig .gitattributes .dockerignore .npmrc .prettierrc .eslintrc'
 ).split())
 OFFICE = {'.docx': 'word/document.xml', '.xlsx': 'xl/workbook.xml',
           '.pptx': 'ppt/presentation.xml'}
@@ -92,13 +94,20 @@ class Keywords:
         fold = (lambda w: w) if self.case_sensitive else str.lower
         return [w for w in self.words if fold(w) == fold(w)[::-1]]
 
+    def matches(self, text):
+        """Non-overlapping matches (index, start, end); the earliest and longest win."""
+        found = sorted(self.ranges(text), key=lambda r: (r[1], r[1] - r[2]))
+        chosen, position = [], 0
+        for index, start, end in found:
+            if start >= position:
+                chosen.append((index, start, end))
+                position = end
+        return chosen
+
     def reverse(self, text):
         """Return text with every keyword match written backwards, plus per-keyword counts."""
-        found = sorted(self.ranges(text), key=lambda r: (r[1], r[1] - r[2]))
         out, counts, position = [], {}, 0
-        for index, start, end in found:
-            if start < position:
-                continue  # overlaps a match that was already reversed
+        for index, start, end in self.matches(text):
             out.append(text[position:start])
             out.append(text[start:end][::-1])
             counts[index] = counts.get(index, 0) + 1
@@ -607,6 +616,92 @@ def safe_xml(content, plan, source=None):
                           standalone=info.standalone), reversed_counts, removed
 
 
+def pdf_lines(page):
+    """Yield (text, chars) per text line; chars = (bbox, size, colour, baseline origin) per character."""
+    for block in page.get_text('rawdict')['blocks']:
+        if block.get('type') != 0:
+            continue
+        for line in block['lines']:
+            text, chars = [], []
+            for span in line['spans']:
+                color = tuple(((span['color'] >> shift) & 255) / 255 for shift in (16, 8, 0))
+                for char in span['chars']:
+                    for letter in char['c']:
+                        text.append(letter)
+                        chars.append((char['bbox'], span['size'], color, char['origin']))
+            yield ''.join(text), chars
+
+
+def union(chars):
+    rect = pymupdf.Rect(chars[0][0])
+    for char in chars[1:]:
+        rect |= pymupdf.Rect(char[0])
+    return rect
+
+
+def safe_pdf(data, plan):
+    """Remove matching text lines and rewrite matches backwards, using PDF redaction."""
+    counts, removed, issues = {}, {}, ['PDF: images, outlined text, form fields and attachments are not changed.']
+    with pymupdf.open(stream=data, filetype='pdf') as doc:
+        if doc.needs_pass:
+            raise ValueError('Password-protected PDF cannot be changed.')
+        changed = False
+        for page in doc:
+            inserts = []
+            for text, chars in pdf_lines(page):
+                if not text.strip():
+                    continue
+                hits = plan.clean.matching(text) if plan.clean else []
+                if hits:
+                    page.add_redact_annot(union(chars), fill=False, cross_out=False)
+                    for index in hits:
+                        word = plan.clean.words[index - 1]
+                        removed[word] = removed.get(word, 0) + 1
+                    continue
+                for index, start, end in (plan.reverse.matches(text) if plan.reverse else []):
+                    rect = union(chars[start:end])
+                    page.add_redact_annot(pymupdf.Rect(rect.x0 + .3, rect.y0, rect.x1 - .3, rect.y1),
+                                          fill=False, cross_out=False)
+                    new = text[start:end][::-1]
+                    size = chars[start][1]
+                    width = pymupdf.get_text_length(new, fontname='helv', fontsize=size)
+                    if width > rect.width:
+                        size = max(3, size * rect.width / width)
+                    inserts.append((chars[start][3], new, size, chars[start][2]))
+                    word = plan.reverse.words[index - 1]
+                    counts[word] = counts.get(word, 0) + 1
+            if page.first_annot is not None and (removed or counts or inserts):
+                page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE,
+                                      graphics=pymupdf.PDF_REDACT_LINE_ART_NONE)
+                changed = True
+            for origin, new, size, color in inserts:
+                page.insert_text(origin, new, fontname='helv', fontsize=size, color=color)
+        meta = dict(doc.metadata or {})
+        for key, value in list(meta.items()):
+            if key in ('format', 'encryption') or not isinstance(value, str) or not value:
+                continue
+            hits = plan.clean.matching(value) if plan.clean else []
+            if hits:
+                meta[key] = ''
+                for index in hits:
+                    word = plan.clean.words[index - 1]
+                    removed[word] = removed.get(word, 0) + 1
+            elif plan.reverse:
+                meta[key], found = plan.reverse.reverse(value)
+                merge(counts, by_word(plan.reverse, found))
+            changed = changed or meta[key] != value
+        if changed:
+            doc.set_metadata({k: v for k, v in meta.items() if k not in ('format', 'encryption')})
+            if plan.check.matching(doc.get_xml_metadata() or ''):
+                doc.set_xml_metadata('')
+                issues.append('XMP metadata contained a keyword and was removed.')
+        if not changed:
+            return None, counts, removed, issues
+        new = doc.tobytes(garbage=3, deflate=True)
+    issues.extend(remaining(pdf(new, plan.check)))
+    return new, counts, removed, issues
+
+
 def relationship_source(name):
     """word/_rels/document.xml.rels -> word/document.xml"""
     folder, _, base = name.rpartition('/')
@@ -686,10 +781,8 @@ def make_safe_file(path, relative, plan):
         data = path.read_bytes()
         suffix = path.suffix.lower()
         if data.startswith(b'%PDF-') or suffix == '.pdf':
-            item.status = 'Skipped'
-            item.issues.append('PDF files cannot be rewritten safely; review manually.')
-            return item
-        if suffix in OFFICE:
+            new, counts, removed, left = safe_pdf(data, plan)
+        elif suffix in OFFICE:
             new, counts, removed, left = safe_office(data, suffix, plan)
         elif suffix in TEXT_EXTENSIONS or path.name.lower() in TEXT_EXTENSIONS or not suffix:
             new, counts, removed, left = safe_text(data, plan)
