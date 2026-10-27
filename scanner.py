@@ -334,12 +334,15 @@ def alternate_streams(path):
 
 def scan_folder(source, keys, cancel=None, progress=None):
     source = Path(source).absolute()
-    if not source.is_dir() or is_link(source):
-        raise ValueError('Choose an existing, non-linked directory.')
+    single = source.is_file() and not is_link(source)
+    if not (single or source.is_dir()) or is_link(source):
+        raise ValueError('Choose an existing, non-linked folder or file.')
     source = source.resolve()
+    base = source.parent if single else source
     report = Report(str(source), datetime.now(timezone.utc).isoformat())
     root_check = Inspection()
-    keys.inspect(source.name, 'Selected folder name', root_check)
+    if not single:
+        keys.inspect(source.name, 'Selected folder name', root_check)
     if root_check.hits:
         report.issues.append('Selected folder name contains a configured keyword.')
     cancel = cancel or threading.Event()
@@ -347,13 +350,14 @@ def scan_folder(source, keys, cancel=None, progress=None):
     def error(exc):
         report.issues.append(f'Cannot enumerate directory: {exc.filename} ({type(exc).__name__})')
 
-    for directory, folders, files in os.walk(source, followlinks=False, onerror=error):
+    walk = [(str(base), [], [source.name])] if single else os.walk(source, followlinks=False, onerror=error)
+    for directory, folders, files in walk:
         if cancel.is_set():
             report.cancelled = True
             break
         parent = Path(directory)
         try:
-            if alternate_streams(parent):
+            if not single and alternate_streams(parent):
                 report.issues.append('Uninspected directory alternate streams: ' + str(parent.relative_to(source)))
         except OSError as exc:
             report.issues.append(f'Cannot inspect directory alternate streams: {parent.relative_to(source)} ({exc})')
@@ -370,7 +374,7 @@ def scan_folder(source, keys, cancel=None, progress=None):
                 report.cancelled = True
                 break
             path = parent / filename
-            relative = path.relative_to(source)
+            relative = path.relative_to(base)
             result = Inspection()
             checked = False
             keys.inspect(str(relative), 'File or directory name', result)
@@ -836,9 +840,11 @@ def make_safe_file(path, relative, plan):
 
 def make_safe_folder(source, plan, cancel=None, progress=None):
     source = Path(source).absolute()
-    if not source.is_dir() or is_link(source):
-        raise ValueError('Choose an existing, non-linked directory.')
+    single = source.is_file() and not is_link(source)
+    if not (single or source.is_dir()) or is_link(source):
+        raise ValueError('Choose an existing, non-linked folder or file.')
     source = source.resolve()
+    base = source.parent if single else source
     report = SafeReport(str(source), datetime.now(timezone.utc).isoformat(),
                         list(plan.reverse_words), list(plan.clean_words))
     cancel = cancel or threading.Event()
@@ -846,7 +852,8 @@ def make_safe_folder(source, plan, cancel=None, progress=None):
     def error(exc):
         report.issues.append(f'Cannot enumerate directory: {exc.filename} ({type(exc).__name__})')
 
-    for directory, folders, files in os.walk(source, followlinks=False, onerror=error):
+    walk = [(str(base), [], [source.name])] if single else os.walk(source, followlinks=False, onerror=error)
+    for directory, folders, files in walk:
         parent = Path(directory)
         for folder in list(folders):
             try:
@@ -861,9 +868,9 @@ def make_safe_folder(source, plan, cancel=None, progress=None):
                 report.cancelled = True
                 break
             path = parent / filename
-            report.files.append(make_safe_file(path, path.relative_to(source), plan))
+            report.files.append(make_safe_file(path, path.relative_to(base), plan))
             if progress:
-                progress(len(report.files), str(path.relative_to(source)))
+                progress(len(report.files), str(path.relative_to(base)))
         if report.cancelled:
             break
     if not report.files and not report.cancelled:

@@ -225,5 +225,45 @@ class KeywordSettingsTests(unittest.TestCase):
                 close_app(app)
 
 
+    def test_single_file_source_renames_button_and_processes_only_it(self):
+        base = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as folder:
+            root = Path(folder)
+            (root / 'a.txt').write_text('git here')
+            (root / 'b.txt').write_text('git there')
+            app = make_app()
+            app.withdraw()
+            try:
+                app.source.set(str(root / 'a.txt'))
+                app.keywords.insert('1.0', 'git')
+                app.update()
+                self.assertEqual(app.scan_button.cget('text'), 'Scan File')
+                app.scan_button.invoke()
+                deadline = time.monotonic() + 10
+                while app.running and time.monotonic() < deadline:
+                    app.update()
+                    time.sleep(.01)
+                self.assertEqual([app.table.item(i, 'values')[:2] for i in app.table.get_children()],
+                                 [('Failed', 'a.txt')])
+                app.tabs.select(2)
+                app.safe_keywords.insert('1.0', 'git')
+                app.update()
+                self.assertEqual(app.scan_button.cget('text'), 'MakeItSafe File')
+                with patch('app.messagebox.askyesno', return_value=True):
+                    app.scan_button.invoke()
+                deadline = time.monotonic() + 10
+                while app.running and time.monotonic() < deadline:
+                    app.update()
+                    time.sleep(.01)
+                self.assertEqual((root / 'a.txt').read_text(), 'tig here')
+                self.assertEqual((root / 'b.txt').read_text(), 'git there')
+                app.source.set(str(root))
+                app.update()
+                self.assertEqual(app.scan_button.cget('text'), 'MakeItSafe Folder')
+            finally:
+                close_app(app)
+
+
 if __name__ == '__main__':
     unittest.main()

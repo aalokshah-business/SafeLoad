@@ -310,6 +310,25 @@ class MakeItSafeTests(unittest.TestCase):
 FIXTURES = Path(__file__).resolve().parent / 'fixtures'
 
 
+class SingleFileTests(unittest.TestCase):
+    def test_scan_and_make_safe_accept_one_file(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'a.txt').write_text('git here')
+            (root / 'b.txt').write_text('git there')
+            keys = Keywords('git')
+            scan = scan_folder(root / 'a.txt', keys)
+            self.assertEqual([(f.path, f.status) for f in scan.files], [('a.txt', 'Failed')])
+            self.assertEqual(scan.source, str((root / 'a.txt').resolve()))
+            report = make_safe_folder(root / 'a.txt', Plan('git'))
+            self.assertEqual([(f.path, f.status, f.replaced) for f in report.files],
+                             [('a.txt', 'Processed', {'git': 1})])
+            self.assertEqual((root / 'a.txt').read_text(), 'tig here')
+            self.assertEqual((root / 'b.txt').read_text(), 'git there')
+            with self.assertRaises(ValueError):
+                scan_folder(root / 'missing.txt', keys)
+
+
 class OldOfficeTests(unittest.TestCase):
     """legacy.doc, legacy.xls and legacy.ppt were saved by real Word, Excel and PowerPoint."""
 

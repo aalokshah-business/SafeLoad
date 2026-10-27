@@ -43,7 +43,7 @@ class App(tk.Tk):
         self.source = tk.StringVar()
         self.case = tk.BooleanVar(value=False)
         self.safe_case = tk.BooleanVar(value=False)
-        self.state_text = tk.StringVar(value='Not Scanned — Choose A Folder And Enter Keywords')
+        self.state_text = tk.StringVar(value='Not Scanned — Choose A Folder Or File And Enter Keywords')
         self.progress_text = tk.StringVar(value='All file processing stays on this computer.')
         self.protocol('WM_DELETE_WINDOW', self.close)
         shell = ttk.Frame(self, padding=16)
@@ -59,13 +59,16 @@ class App(tk.Tk):
         makesafe = ttk.Frame(tabs, padding=(12, 8))
         tabs.add(makesafe, text='3  MakeItSafe')
         directory.columnconfigure(1, weight=1)
-        ttk.Label(directory, text='Source Folder').grid(row=0, column=0, sticky='w', padx=(0, 16))
+        ttk.Label(directory, text='Folder Or File').grid(row=0, column=0, sticky='w', padx=(0, 16))
         self.source_entry = ttk.Entry(directory, textvariable=self.source)
         self.source_entry.grid(row=0, column=1, sticky='ew', pady=5)
-        self.browse_source = ttk.Button(directory, text='Browse…', command=self.choose_source)
+        self.browse_source = ttk.Button(directory, text='Browse Folder…', command=self.choose_source)
         self.browse_source.grid(row=0, column=2, padx=(10, 0))
-        ttk.Label(directory, text='Subfolders included. Scanning only reads files; matching files appear first.').grid(
-            row=1, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        self.browse_file = ttk.Button(directory, text='Browse File…', command=self.choose_file)
+        self.browse_file.grid(row=0, column=3, padx=(8, 0))
+        ttk.Label(directory, text='A folder includes its subfolders; choose a single file to process only that file. '
+                 'Scanning only reads files; matching files appear first.').grid(
+            row=1, column=0, columnspan=4, sticky='w', pady=(4, 0))
         keyword_header = ttk.Frame(keywords)
         keyword_header.pack(fill='x')
         ttk.Label(keyword_header, text='Keywords Or Phrases, Separated By Commas').pack(side='left')
@@ -86,7 +89,7 @@ class App(tk.Tk):
         safe_row.grid(row=2, column=0, columnspan=2, sticky='ew')
         self.safe_case_check = ttk.Checkbutton(safe_row, text='Case-Sensitive Matching', variable=self.safe_case)
         self.safe_case_check.pack(side='left', padx=(0, 12))
-        ttk.Label(safe_row, text='Uses the folder from tab 1. The button below becomes MakeItSafe Folder. Lines are removed first, then matches reversed.').pack(side='left')
+        ttk.Label(safe_row, text='Uses the folder or file from tab 1. The button below becomes MakeItSafe Folder or MakeItSafe File. Lines are removed first, then matches reversed.').pack(side='left')
         controls = ttk.Frame(shell)
         controls.pack(fill='x', pady=8)
         self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.act)
@@ -139,6 +142,7 @@ class App(tk.Tk):
         self.after(100, self.poll)
         for variable in (self.source, self.case):
             variable.trace_add('write', self.invalidate)
+        self.source.trace_add('write', self.tab_changed)
         self.keywords.bind('<<Modified>>', self.keywords_modified)
         tabs.bind('<<NotebookTabChanged>>', self.tab_changed)
 
@@ -189,7 +193,7 @@ class App(tk.Tk):
         self.status.configure(foreground='#25334a')
         self.export_button.configure(state='disabled')
         self.table.delete(*self.table.get_children())
-        self.set_details('Scan again to check the current folder and keywords.')
+        self.set_details('Scan again to check the current folder or file and keywords.')
 
     def keywords_modified(self, _=None):
         if self.keywords.edit_modified():
@@ -201,13 +205,18 @@ class App(tk.Tk):
         if path:
             self.source.set(path)
 
+    def choose_file(self):
+        path = filedialog.askopenfilename(title='Choose Source File')
+        if path:
+            self.source.set(path)
+
     def start(self):
         if self.running:
             return
         try:
             keys = Keywords(self.keywords.get('1.0', 'end'), self.case.get())
             if not self.source.get().strip():
-                raise ValueError('Choose a source folder.')
+                raise ValueError('Choose a source folder or file.')
         except ValueError as exc:
             messagebox.showerror('Cannot Start', str(exc))
             return
@@ -239,7 +248,7 @@ class App(tk.Tk):
 
     def lock(self, busy):
         state = 'disabled' if busy else 'normal'
-        for control in (self.scan_button, self.source_entry, self.browse_source,
+        for control in (self.scan_button, self.source_entry, self.browse_source, self.browse_file,
                         self.case_check, self.safe_case_check, self.keywords, self.safe_keywords, self.safe_clean):
             control.configure(state=state)
         self.tab_changed()
@@ -247,10 +256,12 @@ class App(tk.Tk):
     def making_safe(self):
         return self.tabs.index(self.tabs.select()) == 2
 
-    def tab_changed(self, _=None):
+    def tab_changed(self, *_):
         """One action button: Scan Folder on tabs 1 and 2, MakeItSafe Folder on tab 3."""
         if not self.running:
-            self.scan_button.configure(text='MakeItSafe Folder' if self.making_safe() else 'Scan Folder')
+            path = self.source.get().strip()
+            noun = 'File' if path and Path(path).is_file() else 'Folder'
+            self.scan_button.configure(text=('MakeItSafe ' if self.making_safe() else 'Scan ') + noun)
 
     def act(self):
         self.start_safe() if self.making_safe() else self.start()
@@ -262,7 +273,7 @@ class App(tk.Tk):
             plan = Plan(self.safe_keywords.get('1.0', 'end'), self.safe_clean.get('1.0', 'end'),
                         self.safe_case.get())
             if not self.source.get().strip():
-                raise ValueError('Choose a source folder in tab 1.')
+                raise ValueError('Choose a source folder or file in tab 1.')
         except ValueError as exc:
             messagebox.showerror('Cannot Start', str(exc))
             return
@@ -331,7 +342,7 @@ class App(tk.Tk):
                               sum(item.replaced.values()) + sum(item.removed.values())), tags=(item.status,))
         for i, issue in enumerate(report.issues):
             self.table.insert('', 0, iid=f'issue-{i}', values=('Error', issue, ''), tags=('Error',))
-        lines = ['MakeItSafe folder:', report.source]
+        lines = ['MakeItSafe target:', report.source]
         if report.reverse_words:
             lines.extend(['', 'Reversed:'])
             for word, total in report.totals.items():
@@ -397,7 +408,7 @@ class App(tk.Tk):
         for i, issue in enumerate(value.issues):
             self.table.insert('', position, iid=f'issue-{i}', values=('Not Scanned', issue, ''), tags=('Not Scanned',))
             position += 1
-        self.set_details('Scanned folder:\n' + value.source +
+        self.set_details('Scanned:\n' + value.source +
                          '\n\nSelect a failed file to see keyword locations or inspection issues. '
                          'Resolve files manually, then scan again.\n\nScanning never modifies files. '
                          'Reports include matched keyword names and may contain sensitive terms and paths.')
@@ -467,7 +478,7 @@ class App(tk.Tk):
                 target = Path(path).resolve()
                 folder = Path(current.source)
                 if target == folder or folder in target.parents:
-                    raise ValueError('Save reports outside the source folder; reports can contain sensitive paths.')
+                    raise ValueError('Save reports outside the scanned folder; reports can contain sensitive paths.')
                 current.save(target)
             except Exception as exc:
                 messagebox.showerror('Cannot Save Report', str(exc))
