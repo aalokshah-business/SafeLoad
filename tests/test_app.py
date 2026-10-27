@@ -246,6 +246,8 @@ class KeywordSettingsTests(unittest.TestCase):
                     time.sleep(.01)
                 self.assertEqual([app.table.item(i, 'values')[:2] for i in app.table.get_children()],
                                  [('Failed', 'a.txt')])
+                self.assertEqual(app.table.item('0', 'values')[3], 'git')
+                self.assertIn('Keyword "git"', app.detail.get('1.0', 'end'))
                 app.tabs.select(2)
                 app.safe_keywords.insert('1.0', 'git')
                 app.update()
@@ -258,6 +260,8 @@ class KeywordSettingsTests(unittest.TestCase):
                     time.sleep(.01)
                 self.assertEqual((root / 'a.txt').read_text(), 'tig here')
                 self.assertEqual((root / 'b.txt').read_text(), 'git there')
+                self.assertEqual(app.table.item('0', 'values')[3], 'git')
+                self.assertIn('"git" has been replaced with "tig"', app.detail.get('1.0', 'end'))
                 app.source.set(str(root))
                 app.update()
                 self.assertEqual(app.scan_button.cget('text'), 'MakeItSafe Folder')

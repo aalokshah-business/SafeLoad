@@ -109,9 +109,9 @@ class App(tk.Tk):
         details = ttk.Frame(panes)
         panes.add(listing, weight=3)
         panes.add(details, weight=2)
-        self.table = ttk.Treeview(listing, columns=('status', 'path', 'matches'), height=6, show='headings', selectmode='browse')
+        self.table = ttk.Treeview(listing, columns=('status', 'path', 'matches', 'keywords'), height=6, show='headings', selectmode='browse')
         for name, title, column_width in [('status', 'Status', 110), ('path', 'File', 390),
-                                   ('matches', 'Matches', 65)]:
+                                   ('matches', 'Matches', 65), ('keywords', 'Keywords', 150)]:
             self.table.heading(name, text=title)
             self.table.column(name, width=column_width, minwidth=45, stretch=name == 'path')
         scroll = ttk.Scrollbar(listing, orient='vertical', command=self.table.yview)
@@ -339,7 +339,8 @@ class App(tk.Tk):
             f'{count.get(s, 0)} {s}' for s in ('Processed', 'Partly Processed', 'Skipped', 'Unchanged', 'Error')))
         for i, item in enumerate(report.files):
             self.table.insert('', 'end', iid=str(i), values=(item.status, item.path,
-                              sum(item.replaced.values()) + sum(item.removed.values())), tags=(item.status,))
+                              sum(item.replaced.values()) + sum(item.removed.values()),
+                              ', '.join(dict.fromkeys([*item.replaced, *item.removed]))), tags=(item.status,))
         for i, issue in enumerate(report.issues):
             self.table.insert('', 0, iid=f'issue-{i}', values=('Error', issue, ''), tags=('Error',))
         lines = ['MakeItSafe target:', report.source]
@@ -356,6 +357,13 @@ class App(tk.Tk):
         lines.extend(['', 'Select a file to see what changed. Run a scan with all of the words '
                       'to confirm nothing remains.'])
         self.set_details('\n'.join(lines))
+        self.select_only_file(len(report.files))
+
+    def select_only_file(self, count):
+        """A one-file result has nothing to pick, so show that file's details straight away."""
+        if count == 1:
+            self.table.selection_set('0')
+            self.show_details()
 
     def poll(self):
         latest = None
@@ -402,7 +410,8 @@ class App(tk.Tk):
                                f'{unscanned} Not Scanned · {len(value.files) - failed - unscanned} OK')
         for i, item in enumerate(value.files):
             self.table.insert('', 'end', iid=str(i), values=(item.status, item.path,
-                              sum(h.count for h in item.found)), tags=(item.status,))
+                              sum(h.count for h in item.found),
+                              ', '.join(dict.fromkeys(h.keyword_text for h in item.found))), tags=(item.status,))
         # Keep folder-level inspection failures above the OK files, after matches.
         position = failed + unscanned
         for i, issue in enumerate(value.issues):
@@ -412,6 +421,7 @@ class App(tk.Tk):
                          '\n\nSelect a failed file to see keyword locations or inspection issues. '
                          'Resolve files manually, then scan again.\n\nScanning never modifies files. '
                          'Reports include matched keyword names and may contain sensitive terms and paths.')
+        self.select_only_file(len(value.files))
 
     def set_details(self, text):
         self.detail.configure(state='normal')
