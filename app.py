@@ -61,7 +61,7 @@ class App(tk.Tk):
         makesafe = ttk.Frame(tabs, padding=(12, 8))
         tabs.add(makesafe, text='3  MakeItSafe')
         rawtab = ttk.Frame(tabs, padding=(12, 8))
-        tabs.add(rawtab, text='4  Raw Text')
+        tabs.add(rawtab, text='4  RawTextScan')
         directory.columnconfigure(1, weight=1)
         ttk.Label(directory, text='Folder Or File').grid(row=0, column=0, sticky='w', padx=(0, 16))
         self.source_entry = ttk.Entry(directory, textvariable=self.source)
@@ -98,13 +98,15 @@ class App(tk.Tk):
         raw_row.pack(fill='x')
         self.raw_paste_button = ttk.Button(raw_row, text='Paste From Clipboard', command=self.raw_paste)
         self.raw_paste_button.pack(side='left')
+        self.raw_scan_button = ttk.Button(raw_row, text='Scan Text', command=self.raw_scan)
+        self.raw_scan_button.pack(side='left', padx=8)
         self.raw_safe_button = ttk.Button(raw_row, text='MakeItSafe Text', command=self.raw_make_safe)
-        self.raw_safe_button.pack(side='left', padx=8)
+        self.raw_safe_button.pack(side='left')
         self.raw_copy_button = ttk.Button(raw_row, text='Copy Text', command=self.raw_copy)
-        self.raw_copy_button.pack(side='left')
+        self.raw_copy_button.pack(side='left', padx=8)
         self.raw_clear_button = ttk.Button(raw_row, text='Clear', command=self.raw_clear)
-        self.raw_clear_button.pack(side='left', padx=8)
-        ttk.Label(rawtab, text='Scan Text (button below) uses the keywords from tab 2. MakeItSafe Text uses the boxes in tab 3 '
+        self.raw_clear_button.pack(side='left')
+        ttk.Label(rawtab, text='Scan Text uses the keywords from tab 2. MakeItSafe Text uses the boxes in tab 3 '
                   'and rewrites the text here; Ctrl+Z undoes it. Nothing is saved or sent anywhere.',
                   wraplength=800).pack(anchor='w', pady=(6, 0))
         controls = ttk.Frame(shell)
@@ -276,7 +278,7 @@ class App(tk.Tk):
         state = 'disabled' if busy else 'normal'
         for control in (self.scan_button, self.source_entry, self.browse_source, self.browse_file,
                         self.case_check, self.safe_case_check, self.keywords, self.safe_keywords, self.safe_clean,
-                        self.raw_paste_button, self.raw_safe_button, self.raw_copy_button, self.raw_clear_button):
+                        self.raw_paste_button, self.raw_scan_button, self.raw_safe_button, self.raw_copy_button, self.raw_clear_button):
             control.configure(state=state)
         self.raw_text.configure(state=state)
         self.tab_changed()
@@ -288,15 +290,14 @@ class App(tk.Tk):
         return self.tabs.index(self.tabs.select()) == 3
 
     def tab_changed(self, *_):
-        """One action button: Scan Folder on tabs 1 and 2, MakeItSafe Folder on tab 3, Scan Text on tab 4."""
+        """One action button: Scan Folder on tabs 1 and 2, MakeItSafe Folder on tab 3; blocked on tab 4,
+        whose own buttons sit in the tab."""
         raw = self.raw_mode()
         if not self.running:
             path = self.source.get().strip()
             noun = 'File' if path and Path(path).is_file() else 'Folder'
-            if raw:
-                self.scan_button.configure(text='Scan Text')
-            else:
-                self.scan_button.configure(text=('MakeItSafe ' if self.making_safe() else 'Scan ') + noun)
+            self.scan_button.configure(text=('MakeItSafe ' if self.making_safe() else 'Scan ') + noun,
+                                       state='disabled' if raw else 'normal')
             reports = self.safe_report or self.report
             self.export_button.configure(state='normal' if reports and not raw else 'disabled')
         view = 'raw' if raw else 'files'
@@ -312,9 +313,7 @@ class App(tk.Tk):
             self.set_details(self.view_details[view])
 
     def act(self):
-        if self.raw_mode():
-            self.raw_scan()
-        elif self.making_safe():
+        if self.making_safe():
             self.start_safe()
         else:
             self.start()

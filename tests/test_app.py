@@ -278,12 +278,14 @@ class KeywordSettingsTests(unittest.TestCase):
             app.safe_clean.insert('1.0', 'github')
             app.tabs.select(3)
             app.update()
-            self.assertEqual(app.scan_button.cget('text'), 'Scan Text')
+            self.assertEqual(app.tabs.tab(3, 'text'), '4  RawTextScan')
+            self.assertEqual(str(app.scan_button.cget('state')), 'disabled')
+            self.assertEqual(str(app.stop_button.cget('state')), 'disabled')
             self.assertEqual(str(app.export_button.cget('state')), 'disabled')
             self.assertIn(str(app.raw_frame), app.panes.panes())
             self.assertNotIn(str(app.listing), app.panes.panes())
             app.raw_text.insert('1.0', 'keep git\nsee github here\nlast')
-            app.scan_button.invoke()
+            app.raw_scan_button.invoke()
             app.update()
             self.assertEqual(app.state_text.get(), 'Unsafe — Keyword Matches Found')
             self.assertEqual(len(app.raw_text.tag_ranges('hit')), 4)
@@ -299,9 +301,9 @@ class KeywordSettingsTests(unittest.TestCase):
             app.update()
             self.assertIn(str(app.listing), app.panes.panes())
             self.assertEqual(app.scan_button.cget('text'), 'Scan Folder')
+            self.assertEqual(str(app.scan_button.cget('state')), 'normal')
         finally:
             close_app(app)
-
 
 if __name__ == '__main__':
     unittest.main()
