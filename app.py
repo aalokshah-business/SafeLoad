@@ -8,7 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from scanner import Keywords, make_safe_folder, scan_folder
+from scanner import Keywords, Plan, make_safe_folder, scan_folder
 
 
 class App(tk.Tk):
@@ -74,18 +74,21 @@ class App(tk.Tk):
         self.keywords = tk.Text(keywords, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
         self.keywords.pack(fill='x', pady=4)
         ttk.Label(keywords, text='Literal substring matches, including inside longer words. Commas separate entries; no regex.').pack(anchor='w', pady=(4, 0))
-        safe_header = ttk.Frame(makesafe)
-        safe_header.pack(fill='x')
-        ttk.Label(safe_header, text='Keywords To Make Safe, Separated By Commas').pack(side='left')
-        self.safe_case_check = ttk.Checkbutton(safe_header, text='Case-Sensitive Matching', variable=self.safe_case)
-        self.safe_case_check.pack(side='right')
+        makesafe.columnconfigure(0, weight=1, uniform='safe')
+        makesafe.columnconfigure(1, weight=1, uniform='safe')
+        ttk.Label(makesafe, text='Reverse These Keywords (git → tig)').grid(row=0, column=0, sticky='w')
+        ttk.Label(makesafe, text='Remove Every Line Containing These Keywords').grid(row=0, column=1, sticky='w', padx=(12, 0))
         self.safe_keywords = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
-        self.safe_keywords.pack(fill='x', pady=4)
+        self.safe_keywords.grid(row=1, column=0, sticky='ew', pady=4)
+        self.safe_clean = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.safe_clean.grid(row=1, column=1, sticky='ew', pady=4, padx=(12, 0))
         safe_row = ttk.Frame(makesafe)
-        safe_row.pack(fill='x')
+        safe_row.grid(row=2, column=0, columnspan=2, sticky='ew')
         self.safe_button = ttk.Button(safe_row, text='MakeItSafe Folder', command=self.start_safe)
         self.safe_button.pack(side='left')
-        ttk.Label(safe_row, text='Uses the folder from tab 1. Rewrites files in place: every match is written backwards (git → tig).').pack(side='left', padx=12)
+        self.safe_case_check = ttk.Checkbutton(safe_row, text='Case-Sensitive Matching', variable=self.safe_case)
+        self.safe_case_check.pack(side='left', padx=12)
+        ttk.Label(safe_row, text='Uses the folder from tab 1. Rewrites files in place. Lines are removed first, then matches reversed.').pack(side='left')
         controls = ttk.Frame(shell)
         controls.pack(fill='x', pady=8)
         self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.start)
@@ -149,6 +152,8 @@ class App(tk.Tk):
             self.case.set(settings.get('case_sensitive') is True)
             if isinstance(settings.get('safe_keywords'), str):
                 self.safe_keywords.insert('1.0', settings['safe_keywords'])
+            if isinstance(settings.get('safe_clean_keywords'), str):
+                self.safe_clean.insert('1.0', settings['safe_clean_keywords'])
             self.safe_case.set(settings.get('safe_case_sensitive') is True)
         except FileNotFoundError:
             pass
@@ -162,6 +167,7 @@ class App(tk.Tk):
             settings = {'keywords': self.keywords.get('1.0', 'end-1c'),
                         'case_sensitive': self.case.get(),
                         'safe_keywords': self.safe_keywords.get('1.0', 'end-1c'),
+                        'safe_clean_keywords': self.safe_clean.get('1.0', 'end-1c'),
                         'safe_case_sensitive': self.safe_case.get()}
             handle, temporary = tempfile.mkstemp(prefix='.settings-', dir=self.settings_path.parent)
             with os.fdopen(handle, 'w', encoding='utf-8') as stream:
@@ -235,33 +241,36 @@ class App(tk.Tk):
     def lock(self, busy):
         state = 'disabled' if busy else 'normal'
         for control in (self.scan_button, self.safe_button, self.source_entry, self.browse_source,
-                        self.case_check, self.safe_case_check, self.keywords, self.safe_keywords):
+                        self.case_check, self.safe_case_check, self.keywords, self.safe_keywords, self.safe_clean):
             control.configure(state=state)
 
     def start_safe(self):
         if self.running:
             return
         try:
-            keys = Keywords(self.safe_keywords.get('1.0', 'end'), self.safe_case.get())
+            plan = Plan(self.safe_keywords.get('1.0', 'end'), self.safe_clean.get('1.0', 'end'),
+                        self.safe_case.get())
             if not self.source.get().strip():
                 raise ValueError('Choose a source folder in tab 1.')
-            palindromes = keys.palindromes()
-            if palindromes:
-                raise ValueError('These keywords read the same backwards, so reversing cannot remove them: '
-                                 + ', '.join(palindromes))
         except ValueError as exc:
             messagebox.showerror('Cannot Start', str(exc))
             return
-        pairs = ', '.join(f'{w} → {w[::-1]}' for w in keys.words[:5]) + (' …' if len(keys.words) > 5 else '')
+        lines = []
+        if plan.reverse_words:
+            lines.append('Written backwards: ' + ', '.join(f'{w} → {w[::-1]}' for w in plan.reverse_words[:5])
+                         + (' …' if len(plan.reverse_words) > 5 else ''))
+        if plan.clean_words:
+            lines.append('Lines removed that contain: ' + ', '.join(plan.clean_words[:5])
+                         + (' …' if len(plan.clean_words) > 5 else ''))
         if not messagebox.askyesno('Confirm MakeItSafe',
                                    f'This rewrites matching files in place, with no backup:\n{self.source.get()}\n\n'
-                                   f'Every match is written backwards ({pairs}).\n\nContinue?', icon='warning'):
+                                   + '\n'.join(lines) + '\n\nContinue?', icon='warning'):
             return
         if not self.save_settings():
             return
         self.report = None
         self.safe_report = None
-        self.table.heading('matches', text='Replaced')
+        self.table.heading('matches', text='Changes')
         self.running = True
         self.cancel.clear()
         self.table.delete(*self.table.get_children())
@@ -276,7 +285,7 @@ class App(tk.Tk):
 
         def work():
             try:
-                report = make_safe_folder(source, keys, self.cancel,
+                report = make_safe_folder(source, plan, self.cancel,
                                           lambda n, p: self.events.put(('progress', (n, p))))
                 self.events.put(('safe_done', report))
             except Exception as exc:
@@ -308,14 +317,21 @@ class App(tk.Tk):
             f'{count.get(s, 0)} {s}' for s in ('Processed', 'Partly Processed', 'Skipped', 'Unchanged', 'Error')))
         for i, item in enumerate(report.files):
             self.table.insert('', 'end', iid=str(i), values=(item.status, item.path,
-                              sum(item.replaced.values())), tags=(item.status,))
+                              sum(item.replaced.values()) + sum(item.removed.values())), tags=(item.status,))
         for i, issue in enumerate(report.issues):
             self.table.insert('', 0, iid=f'issue-{i}', values=('Error', issue, ''), tags=('Error',))
-        lines = ['MakeItSafe folder:', report.source, '', 'Replacements:']
-        for word, total in report.totals.items():
-            files = sum(word in item.replaced for item in report.files)
-            lines.append(f'"{word}" has been replaced with "{word[::-1]}": {total} time(s) in {files} file(s)')
-        lines.extend(['', 'Select a file to see what was replaced. Run a scan with the original words '
+        lines = ['MakeItSafe folder:', report.source]
+        if report.reverse_words:
+            lines.extend(['', 'Reversed:'])
+            for word, total in report.totals.items():
+                files = sum(word in item.replaced for item in report.files)
+                lines.append(f'"{word}" has been replaced with "{word[::-1]}": {total} time(s) in {files} file(s)')
+        if report.clean_words:
+            lines.extend(['', 'Removed:'])
+            for word, total in report.removed_totals.items():
+                files = sum(word in item.removed for item in report.files)
+                lines.append(f'Lines containing "{word}" have been removed: {total} line(s) in {files} file(s)')
+        lines.extend(['', 'Select a file to see what changed. Run a scan with all of the words '
                       'to confirm nothing remains.'])
         self.set_details('\n'.join(lines))
 
@@ -415,10 +431,15 @@ class App(tk.Tk):
             self.set_details('Status: Error\nReason: ' + self.safe_report.issues[int(key.split('-')[1])])
             return
         item = self.safe_report.files[int(key)]
-        lines = [item.path, '', 'Status: ' + item.status, '', 'Replaced:']
-        lines.extend(f'"{w}" has been replaced with "{w[::-1]}": {n} time(s)' for w, n in item.replaced.items())
-        if not item.replaced:
-            lines.append('Nothing.')
+        lines = [item.path, '', 'Status: ' + item.status]
+        if item.replaced:
+            lines.extend(['', 'Reversed:'])
+            lines.extend(f'"{w}" has been replaced with "{w[::-1]}": {n} time(s)' for w, n in item.replaced.items())
+        if item.removed:
+            lines.extend(['', 'Removed:'])
+            lines.extend(f'Lines containing "{w}" have been removed: {n} line(s)' for w, n in item.removed.items())
+        if not item.replaced and not item.removed:
+            lines.extend(['', 'Nothing changed.'])
         if item.issues:
             lines.extend(['', 'Notes:'] + item.issues)
         self.set_details('\n'.join(lines))

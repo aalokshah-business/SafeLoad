@@ -151,7 +151,8 @@ class KeywordSettingsTests(unittest.TestCase):
             app.close()
             self.assertEqual(json.loads(path.read_text(encoding='utf-8')),
                              {'keywords': text, 'case_sensitive': True,
-                              'safe_keywords': '', 'safe_case_sensitive': False})
+                              'safe_keywords': '', 'safe_clean_keywords': '',
+                              'safe_case_sensitive': False})
             reopened = App(settings_path=path)
             reopened.withdraw()
             try:
@@ -179,7 +180,7 @@ class KeywordSettingsTests(unittest.TestCase):
         base.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=base) as folder:
             root = Path(folder)
-            (root / 'a.txt').write_text('git and business and git')
+            (root / 'a.txt').write_text('git and business and git\nsee github here\nend')
             (root / 'b.txt').write_text('clean')
             app = make_app()
             app.withdraw()
@@ -187,10 +188,11 @@ class KeywordSettingsTests(unittest.TestCase):
                 self.assertEqual(app.safe_button.cget('text'), 'MakeItSafe Folder')
                 app.source.set(str(root))
                 app.safe_keywords.insert('1.0', 'git, business')
+                app.safe_clean.insert('1.0', 'github')
                 app.update()
                 with patch('app.messagebox.askyesno', return_value=False):
                     app.safe_button.invoke()
-                self.assertEqual((root / 'a.txt').read_text(), 'git and business and git')
+                self.assertEqual((root / 'a.txt').read_text(), 'git and business and git\nsee github here\nend')
                 with patch('app.messagebox.askyesno', return_value=True):
                     app.safe_button.invoke()
                 deadline = time.monotonic() + 10
@@ -198,13 +200,14 @@ class KeywordSettingsTests(unittest.TestCase):
                     app.update()
                     time.sleep(.01)
                 self.assertFalse(app.running)
-                self.assertEqual((root / 'a.txt').read_text(), 'tig and ssenisub and tig')
+                self.assertEqual((root / 'a.txt').read_text(), 'tig and ssenisub and tig\nend')
                 rows = [app.table.item(i, 'values') for i in app.table.get_children()]
                 self.assertEqual(rows[0][:2], ('Processed', 'a.txt'))
-                self.assertEqual(str(rows[0][2]), '3')
+                self.assertEqual(str(rows[0][2]), '4')
                 details = app.detail.get('1.0', 'end')
                 self.assertIn('"git" has been replaced with "tig": 2 time(s) in 1 file(s)', details)
                 self.assertIn('"business" has been replaced with "ssenisub"', details)
+                self.assertIn('Lines containing "github" have been removed: 1 line(s) in 1 file(s)', details)
             finally:
                 close_app(app)
 

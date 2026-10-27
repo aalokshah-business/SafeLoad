@@ -8,7 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 import pymupdf
-from scanner import Keywords, inspect_file, make_safe_folder, scan_folder
+from scanner import Keywords, Plan, inspect_file, make_safe_folder, scan_folder
 
 TEST_TMP = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
 TEST_TMP.mkdir(parents=True, exist_ok=True)
@@ -187,7 +187,7 @@ class MakeItSafeTests(unittest.TestCase):
             (root / 'c.docx').write_bytes(docx)
             (root / 'd.bin').write_bytes(b'git')
             keys = Keywords('git, business')
-            report = make_safe_folder(root, keys)
+            report = make_safe_folder(root, Plan('git, business'))
             status = {f.path: f for f in report.files}
             self.assertEqual(status['a.txt'].replaced, {'git': 1, 'business': 1})
             self.assertEqual(status['c.docx'].replaced, {'git': 2})
@@ -210,13 +210,66 @@ class MakeItSafeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
             root = Path(directory)
             (root / 'git.txt').write_text('git tig')
-            report = make_safe_folder(root, Keywords('git, tig'))
+            report = make_safe_folder(root, Plan('git, tig'))
             self.assertEqual(report.files[0].status, 'Partly Processed')
             self.assertTrue(any('still present' in i for i in report.files[0].issues))
             self.assertTrue(any('name contains' in i for i in report.files[0].issues))
             cancel = threading.Event()
             cancel.set()
-            self.assertTrue(make_safe_folder(root, Keywords('git'), cancel).cancelled)
+            self.assertTrue(make_safe_folder(root, Plan('git'), cancel).cancelled)
             with self.assertRaises(ValueError):
-                make_safe_folder(root, Keywords('abba'))
+                make_safe_folder(root, Plan('abba'))
 
+    def test_plan_needs_words_and_clean_may_be_palindrome(self):
+        with self.assertRaises(ValueError):
+            Plan(' , ', '')
+        self.assertEqual(Plan('', 'abba').clean_words, ['abba'])
+        self.assertEqual(Plan('git', 'github').check.words, ['git', 'github'])
+
+    def test_clean_removes_lines_then_reverse_applies(self):
+        text = 'keep git\nsee GitHub here\r\nbusiness\nlast github'
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'a.txt').write_bytes(text.encode())
+            report = make_safe_folder(root, Plan('git, business', 'github'))
+            self.assertEqual((root / 'a.txt').read_bytes().decode(), 'keep tig\nssenisub')
+            item = report.files[0]
+            self.assertEqual((item.status, item.replaced, item.removed),
+                             ('Processed', {'git': 1, 'business': 1}, {'github': 2}))
+            self.assertEqual(report.removed_totals, {'github': 2})
+            only_clean = Plan('', 'github')
+            (root / 'b.txt').write_bytes(b'x\ngithub\ny\n')
+            make_safe_folder(root, only_clean)
+            self.assertEqual((root / 'b.txt').read_bytes().decode(), 'x\ny\n')
+
+    def test_clean_office_paragraphs_cells_and_links(self):
+        body = ('<root><body><p><t>Keep</t></p><p><r><t>see Git</t></r><r><t>Hub now</t></r></p>'
+                '<p><t>Also keep</t></p></body>'
+                '<tbl><tc><p><t>only github</t></p></tc></tbl>'
+                '<sst><si><t>github row</t></si><si><t>fine</t></si></sst></root>')
+        rels = ('<Relationships>'
+                '<Relationship Id="rId1" Target="https://github.com/a" TargetMode="External"/>'
+                '<Relationship Id="rId2" Target="https://github.com/b" TargetMode="External"/>'
+                '<Relationship Id="rId3" Target="styles.xml"/></Relationships>')
+        data = package('word/document.xml', body.replace('<tbl>', '<tbl id="rId2">'),
+                       {'word/_rels/document.xml.rels': rels})
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'c.docx').write_bytes(data)
+            report = make_safe_folder(root, Plan('', 'github'))
+            item = report.files[0]
+            with zipfile.ZipFile(root / 'c.docx') as z:
+                text = z.read('word/document.xml').decode()
+                links = z.read('word/_rels/document.xml.rels').decode()
+            self.assertNotIn('Hub now', text)
+            self.assertIn('Keep', text)
+            self.assertIn('Also keep', text)
+            self.assertIn('fine', text)
+            self.assertNotIn('github row', text)
+            self.assertNotIn('only github', text)
+            self.assertIn('<tc><p>', text)  # last paragraph of a cell is emptied, not deleted
+            self.assertNotIn('rId1', links)  # unreferenced link removed
+            self.assertIn('rId2', links)  # still referenced, kept
+            self.assertIn('rId3', links)
+            self.assertEqual(item.removed['github'], 4)
+            self.assertTrue(any('still present' in i for i in item.issues))

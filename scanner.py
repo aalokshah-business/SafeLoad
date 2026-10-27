@@ -106,6 +106,21 @@ class Keywords:
         out.append(text[position:])
         return ''.join(out), counts
 
+    def matching(self, text):
+        """Indexes (1-based) of the keywords that occur in text."""
+        return [i for i, pattern in enumerate(self.patterns, 1) if pattern.search(text)]
+
+    def drop_lines(self, text):
+        """Remove every line containing a keyword; counts lines per matching keyword."""
+        kept, counts = [], {}
+        for line in text.split('\n'):
+            hits = self.matching(line)
+            for index in hits:
+                counts[index] = counts.get(index, 0) + 1
+            if not hits:
+                kept.append(line)
+        return '\n'.join(kept), counts
+
     def ranges(self, text):
         # Look ahead one character after every match so overlapping matches count.
         count = 0
@@ -371,8 +386,11 @@ def scan_folder(source, keys, cancel=None, progress=None):
     return report
 
 
+
 # ---------------------------------------------------------------- MakeItSafe
-# Rewrites files in place: every keyword match is written backwards ("git" -> "tig").
+# Rewrites files in place. Two actions, removal first, then reversal:
+#   clean   - every line (paragraph) containing a keyword is removed;
+#   reverse - every remaining keyword match is written backwards ("git" -> "tig").
 # Reversal keeps text length, so Office text split across runs can be redistributed exactly.
 BOMS = [(codecs.BOM_UTF32_LE, 'utf-32-le'), (codecs.BOM_UTF32_BE, 'utf-32-be'),
         (codecs.BOM_UTF8, 'utf-8'), (codecs.BOM_UTF16_LE, 'utf-16-le'),
@@ -382,11 +400,33 @@ KEEP_PARTS = {'[Content_Types].xml'}
 STILL = 'Keyword still present: '
 
 
+def has_words(text):
+    return any(w.strip() for w in text.split(','))
+
+
+class Plan:
+    """What MakeItSafe does: keywords to reverse and keywords whose lines are removed."""
+
+    def __init__(self, reverse_text='', clean_text='', case_sensitive=False):
+        if not (has_words(reverse_text) or has_words(clean_text)):
+            raise ValueError('Enter keywords to reverse, keywords whose lines are removed, or both.')
+        self.reverse = Keywords(reverse_text, case_sensitive) if has_words(reverse_text) else None
+        self.clean = Keywords(clean_text, case_sensitive) if has_words(clean_text) else None
+        if self.reverse and self.reverse.palindromes():
+            raise ValueError('These keywords read the same backwards, so reversing cannot remove them: '
+                             + ', '.join(self.reverse.palindromes()))
+        self.reverse_words = list(self.reverse.words) if self.reverse else []
+        self.clean_words = list(self.clean.words) if self.clean else []
+        # Every configured word is checked afterwards for matches that survived.
+        self.check = Keywords(','.join(self.reverse_words + self.clean_words), case_sensitive)
+
+
 @dataclass
 class SafeFile:
     path: str
     status: str  # Processed, Partly Processed, Unchanged, Skipped or Error
-    replaced: dict[str, int] = field(default_factory=dict)
+    replaced: dict[str, int] = field(default_factory=dict)  # reverse keyword -> matches reversed
+    removed: dict[str, int] = field(default_factory=dict)   # clean keyword -> lines removed
     issues: list[str] = field(default_factory=list)
 
 
@@ -394,23 +434,34 @@ class SafeFile:
 class SafeReport:
     source: str
     started: str
-    words: list[str]
+    reverse_words: list[str]
+    clean_words: list[str]
     files: list[SafeFile] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
     cancelled: bool = False
 
-    @property
-    def totals(self):
-        totals = {w: 0 for w in self.words}
-        for item in self.files:
-            for word, number in item.replaced.items():
+    @staticmethod
+    def total(files, attribute, words):
+        totals = {w: 0 for w in words}
+        for item in files:
+            for word, number in getattr(item, attribute).items():
                 totals[word] += number
         return totals
+
+    @property
+    def totals(self):
+        return self.total(self.files, 'replaced', self.reverse_words)
+
+    @property
+    def removed_totals(self):
+        return self.total(self.files, 'removed', self.clean_words)
 
     def save(self, path: Path):
         body = asdict(self)
         body['totals'] = self.totals
-        body['scope'] = ('Files were rewritten in place; every keyword match was written backwards. '
+        body['removed_totals'] = self.removed_totals
+        body['scope'] = ('Files were rewritten in place: lines containing clean keywords were removed and '
+                         'every reverse keyword match was written backwards. '
                          'Report terms and paths may contain sensitive information.')
         path.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding='utf-8')
 
@@ -419,56 +470,154 @@ def remaining(inspection):
     return list(dict.fromkeys(f'{STILL}{h.keyword_text} · {h.location}' for h in inspection.hits))[:20]
 
 
-def safe_text(data, keys):
+def by_word(keys, counts):
+    return {keys.words[i - 1]: n for i, n in counts.items()}
+
+
+def merge(total, extra):
+    for word, number in extra.items():
+        total[word] = total.get(word, 0) + number
+
+
+def safe_text(data, plan):
     bom, codec = next(((b, c) for b, c in BOMS if data.startswith(b)), (b'', 'utf-8'))
     text, _ = decode_text(data)
-    new, counts = keys.reverse(text)
-    if not counts:
-        return None, counts, []
+    reversed_counts, removed = {}, {}
+    new = text
+    if plan.clean:
+        new, counts = plan.clean.drop_lines(new)
+        removed = by_word(plan.clean, counts)
+    if plan.reverse:
+        new, counts = plan.reverse.reverse(new)
+        reversed_counts = by_word(plan.reverse, counts)
+    if new == text:
+        return None, reversed_counts, removed, []
     left = Inspection()
-    for index, start, _ in keys.ranges(new):
-        left.hits.append(Hit(index, f'Line {new.count(chr(10), 0, start) + 1}', 1, keys.words[index - 1]))
-    return bom + new.encode(codec), counts, remaining(left)
+    for index, start, _ in plan.check.ranges(new):
+        left.hits.append(Hit(index, f'Line {new.count(chr(10), 0, start) + 1}', 1, plan.check.words[index - 1]))
+    return bom + new.encode(codec), reversed_counts, removed, remaining(left)
 
 
-def safe_xml(content, keys):
+def local(node):
+    return etree.QName(node).localname if isinstance(node.tag, str) else ''
+
+
+def paragraph_text(node):
+    return ''.join(t.text or '' for t in node.iter() if local(t) == 't')
+
+
+def detach(node):
+    """Remove an element but keep the text that follows it."""
+    parent, tail = node.getparent(), node.tail
+    if tail:
+        previous = node.getprevious()
+        if previous is not None:
+            previous.tail = (previous.tail or '') + tail
+        else:
+            parent.text = (parent.text or '') + tail
+    parent.remove(node)
+
+
+def deletable(node):
+    """A paragraph may be deleted unless the format needs at least one (or a closing) paragraph."""
+    parent = node.getparent()
+    if parent is None or local(node) != 'p':
+        return False
+    if not any(s is not node and local(s) == 'p' for s in parent):
+        return False
+    return not (local(parent) == 'tc' and parent[-1] is node)
+
+
+def clean_nodes(tree, clean):
+    """Remove (or empty) every paragraph / string item whose text contains a clean keyword."""
+    removed = {}
+    root = tree.getroottree().getroot()
+    for node in list(tree.iter()):
+        if local(node) not in ('p', 'si', 'is'):
+            continue
+        if node is not root and root not in node.iterancestors():
+            continue  # already removed together with an ancestor
+        hits = clean.matching(paragraph_text(node))
+        if not hits:
+            continue
+        for index in hits:
+            removed[clean.words[index - 1]] = removed.get(clean.words[index - 1], 0) + 1
+        if deletable(node):
+            detach(node)
+        else:
+            for t in node.iter():
+                if local(t) == 't':
+                    t.text = ''
+    return removed
+
+
+def clean_relationships(tree, clean, source):
+    """Drop external links to clean keywords that no remaining content refers to."""
+    removed = {}
+    for node in list(tree.iter()):
+        if local(node) != 'Relationship' or node.get('TargetMode') != 'External':
+            continue
+        hits = clean.matching(node.get('Target') or '')
+        identifier = (node.get('Id') or '').encode()
+        if hits and identifier and (b'"' + identifier + b'"') not in source \
+                and (b"'" + identifier + b"'") not in source:
+            detach(node)
+            for index in hits:
+                removed[clean.words[index - 1]] = removed.get(clean.words[index - 1], 0) + 1
+    return removed
+
+
+def safe_xml(content, plan, source=None):
+    """Return (new bytes or None, reversed counts, removed counts). source: bytes of the part a .rels file describes."""
     tree = parse_xml(content)
-    nodes = list(tree.iter())
-    counts = {}
+    reversed_counts, removed = {}, {}
+    if plan.clean:
+        removed = clean_relationships(tree, plan.clean, source) if source is not None \
+            else clean_nodes(tree, plan.clean)
+    if plan.reverse:
+        nodes = list(tree.iter())
 
-    def reverse(text):
-        new, found = keys.reverse(text)
-        for index, number in found.items():
-            counts[index] = counts.get(index, 0) + number
-        return new
+        def reverse(text):
+            new, found = plan.reverse.reverse(text)
+            merge(reversed_counts, by_word(plan.reverse, found))
+            return new
 
-    for group in text_groups(nodes):
-        text = ''.join(n.text or '' for n in group)
-        new = reverse(text)
-        if new != text:
-            position = 0
-            for node in group:
-                size = len(node.text or '')
-                node.text = new[position:position + size]
-                position += size
-    for node in nodes:
-        if isinstance(node.tag, str):
-            for attr, value in list(node.attrib.items()):
-                if etree.QName(attr).localname not in KEEP_ATTRIBUTES:
-                    new = reverse(value)
-                    if new != value:
-                        node.set(attr, new)
-        if node.tail:
-            node.tail = reverse(node.tail)
-    if not counts:
-        return None, counts
+        for group in text_groups(nodes):
+            text = ''.join(n.text or '' for n in group)
+            new = reverse(text)
+            if new != text:
+                position = 0
+                for node in group:
+                    size = len(node.text or '')
+                    node.text = new[position:position + size]
+                    position += size
+        for node in nodes:
+            if isinstance(node.tag, str):
+                for attr, value in list(node.attrib.items()):
+                    if etree.QName(attr).localname not in KEEP_ATTRIBUTES:
+                        new = reverse(value)
+                        if new != value:
+                            node.set(attr, new)
+            if node.tail:
+                node.tail = reverse(node.tail)
+    if not reversed_counts and not removed:
+        return None, reversed_counts, removed
     info = tree.getroottree().docinfo
     return etree.tostring(tree.getroottree(), xml_declaration=True, encoding=info.encoding or 'UTF-8',
-                          standalone=info.standalone), counts
+                          standalone=info.standalone), reversed_counts, removed
 
 
-def safe_office(data, suffix, keys):
-    counts, issues, changed = {}, [], {}
+def relationship_source(name):
+    """word/_rels/document.xml.rels -> word/document.xml"""
+    folder, _, base = name.rpartition('/')
+    if not folder.endswith('_rels'):
+        return ''
+    parent = folder[:-len('_rels')].rstrip('/')
+    return (parent + '/' if parent else '') + base[:-len('.rels')]
+
+
+def safe_office(data, suffix, plan):
+    counts, removed, issues, changed = {}, {}, [], {}
     with zipfile.ZipFile(io.BytesIO(data)) as package:
         entries = package.infolist()
         if len(entries) > 10000 or sum(e.file_size for e in entries) > MAX_PACKAGE:
@@ -477,19 +626,25 @@ def safe_office(data, suffix, keys):
         if len(names) != len(set(names)) or OFFICE[suffix] not in names:
             raise ValueError('Invalid or ambiguous Office package.')
         media = False
+        xml = [e for e in entries if e.filename.endswith(('.xml', '.rels')) and e.filename not in KEEP_PARTS]
         for entry in entries:
             if entry.flag_bits & 1:
                 raise ValueError('Encrypted package entry cannot be changed.')
-            if entry.filename.endswith(('.xml', '.rels')) and entry.filename not in KEEP_PARTS:
-                new, found = safe_xml(package.read(entry), keys)
-                for index, number in found.items():
-                    counts[index] = counts.get(index, 0) + number
-                if new is not None:
-                    changed[entry.filename] = new
-            elif entry.file_size and not entry.is_dir():
+            if entry not in xml and entry.file_size and not entry.is_dir():
                 media = True
+        # Relationship files last: they need the final content of the part they describe.
+        for entry in sorted(xml, key=lambda e: e.filename.endswith('.rels')):
+            source = None
+            if entry.filename.endswith('.rels'):
+                name = relationship_source(entry.filename)
+                source = changed[name] if name in changed else package.read(name) if name in names else b''
+            new, found, gone = safe_xml(package.read(entry), plan, source)
+            merge(counts, found)
+            merge(removed, gone)
+            if new is not None:
+                changed[entry.filename] = new
         if not changed:
-            return None, counts, issues
+            return None, counts, removed, issues
         if media:
             issues.append('Embedded media, macro or binary parts were not changed.')
         output = io.BytesIO()
@@ -499,8 +654,8 @@ def safe_office(data, suffix, keys):
                 content = changed[entry.filename] if entry.filename in changed else package.read(entry)
                 target.writestr(copy.copy(entry), content)
     new = output.getvalue()
-    issues.extend(remaining(office(new, suffix, keys)))
-    return new, counts, issues
+    issues.extend(remaining(office(new, suffix, plan.check)))
+    return new, counts, removed, issues
 
 
 def write_atomic(path, data):
@@ -515,11 +670,11 @@ def write_atomic(path, data):
             os.unlink(temporary)
 
 
-def make_safe_file(path, relative, keys):
+def make_safe_file(path, relative, plan):
     """Return a SafeFile for one file, rewriting it when keywords were found."""
     item = SafeFile(str(relative), 'Unchanged')
     named = Inspection()
-    keys.inspect(str(relative), 'File or directory name', named)
+    plan.check.inspect(str(relative), 'File or directory name', named)
     if named.hits:
         item.issues.append('File or folder name contains a keyword; rename it manually.')
     try:
@@ -535,9 +690,9 @@ def make_safe_file(path, relative, keys):
             item.issues.append('PDF files cannot be rewritten safely; review manually.')
             return item
         if suffix in OFFICE:
-            new, counts, left = safe_office(data, suffix, keys)
+            new, counts, removed, left = safe_office(data, suffix, plan)
         elif suffix in TEXT_EXTENSIONS or path.name.lower() in TEXT_EXTENSIONS or not suffix:
-            new, counts, left = safe_text(data, keys)
+            new, counts, removed, left = safe_text(data, plan)
         else:
             item.status = 'Skipped'
             item.issues.append(f'Unsupported file type: {suffix}. Not changed.')
@@ -547,7 +702,7 @@ def make_safe_file(path, relative, keys):
             if (info.st_size, info.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
                 raise ValueError('File changed while processing; nothing was written. Retry with files closed.')
             write_atomic(path, new)
-            item.replaced = {keys.words[i - 1]: n for i, n in sorted(counts.items())}
+            item.replaced, item.removed = counts, removed
             item.status = 'Processed'
         item.issues.extend(left)
     except Exception as exc:
@@ -559,16 +714,13 @@ def make_safe_file(path, relative, keys):
     return item
 
 
-def make_safe_folder(source, keys, cancel=None, progress=None):
-    palindromes = keys.palindromes()
-    if palindromes:
-        raise ValueError('These keywords read the same backwards, so reversing cannot remove them: '
-                         + ', '.join(palindromes))
+def make_safe_folder(source, plan, cancel=None, progress=None):
     source = Path(source).absolute()
     if not source.is_dir() or is_link(source):
         raise ValueError('Choose an existing, non-linked directory.')
     source = source.resolve()
-    report = SafeReport(str(source), datetime.now(timezone.utc).isoformat(), list(keys.words))
+    report = SafeReport(str(source), datetime.now(timezone.utc).isoformat(),
+                        list(plan.reverse_words), list(plan.clean_words))
     cancel = cancel or threading.Event()
 
     def error(exc):
@@ -589,7 +741,7 @@ def make_safe_folder(source, keys, cancel=None, progress=None):
                 report.cancelled = True
                 break
             path = parent / filename
-            report.files.append(make_safe_file(path, path.relative_to(source), keys))
+            report.files.append(make_safe_file(path, path.relative_to(source), plan))
             if progress:
                 progress(len(report.files), str(path.relative_to(source)))
         if report.cancelled:
