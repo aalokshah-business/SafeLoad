@@ -1,4 +1,4 @@
-"""Two-tab, offline desktop interface for keyword inspection."""
+"""Three-tab, offline desktop interface for keyword inspection and MakeItSafe."""
 from pathlib import Path
 import os
 import json
@@ -8,7 +8,7 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from scanner import Keywords, scan_folder
+from scanner import Keywords, make_safe_folder, scan_folder
 
 
 class App(tk.Tk):
@@ -38,9 +38,11 @@ class App(tk.Tk):
         self.events = queue.Queue()
         self.cancel = threading.Event()
         self.report = None
+        self.safe_report = None
         self.running = False
         self.source = tk.StringVar()
         self.case = tk.BooleanVar(value=False)
+        self.safe_case = tk.BooleanVar(value=False)
         self.state_text = tk.StringVar(value='Not Scanned — Choose A Folder And Enter Keywords')
         self.progress_text = tk.StringVar(value='All file processing stays on this computer.')
         self.protocol('WM_DELETE_WINDOW', self.close)
@@ -54,13 +56,15 @@ class App(tk.Tk):
         keywords = ttk.Frame(tabs, padding=(12, 8))
         tabs.add(directory, text='1  Directory')
         tabs.add(keywords, text='2  Keywords')
+        makesafe = ttk.Frame(tabs, padding=(12, 8))
+        tabs.add(makesafe, text='3  MakeItSafe')
         directory.columnconfigure(1, weight=1)
         ttk.Label(directory, text='Source Folder').grid(row=0, column=0, sticky='w', padx=(0, 16))
         self.source_entry = ttk.Entry(directory, textvariable=self.source)
         self.source_entry.grid(row=0, column=1, sticky='ew', pady=5)
         self.browse_source = ttk.Button(directory, text='Browse…', command=self.choose_source)
         self.browse_source.grid(row=0, column=2, padx=(10, 0))
-        ttk.Label(directory, text='Subfolders included. Files are only read; matching files appear first.').grid(
+        ttk.Label(directory, text='Subfolders included. Scanning only reads files; matching files appear first.').grid(
             row=1, column=0, columnspan=3, sticky='w', pady=(4, 0))
         keyword_header = ttk.Frame(keywords)
         keyword_header.pack(fill='x')
@@ -70,6 +74,18 @@ class App(tk.Tk):
         self.keywords = tk.Text(keywords, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
         self.keywords.pack(fill='x', pady=4)
         ttk.Label(keywords, text='Literal substring matches, including inside longer words. Commas separate entries; no regex.').pack(anchor='w', pady=(4, 0))
+        safe_header = ttk.Frame(makesafe)
+        safe_header.pack(fill='x')
+        ttk.Label(safe_header, text='Keywords To Make Safe, Separated By Commas').pack(side='left')
+        self.safe_case_check = ttk.Checkbutton(safe_header, text='Case-Sensitive Matching', variable=self.safe_case)
+        self.safe_case_check.pack(side='right')
+        self.safe_keywords = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.safe_keywords.pack(fill='x', pady=4)
+        safe_row = ttk.Frame(makesafe)
+        safe_row.pack(fill='x')
+        self.safe_button = ttk.Button(safe_row, text='MakeItSafe Folder', command=self.start_safe)
+        self.safe_button.pack(side='left')
+        ttk.Label(safe_row, text='Uses the folder from tab 1. Rewrites files in place: every match is written backwards (git → tig).').pack(side='left', padx=12)
         controls = ttk.Frame(shell)
         controls.pack(fill='x', pady=8)
         self.scan_button = ttk.Button(controls, text='Scan Folder', command=self.start)
@@ -105,6 +121,10 @@ class App(tk.Tk):
         self.table.tag_configure('Failed', foreground='#a61b29', background='#fff0f0')
         self.table.tag_configure('OK', foreground='#11633a')
         self.table.tag_configure('Not Scanned', foreground='#8b4300', background='#fff4de')
+        self.table.tag_configure('Processed', foreground='#11633a')
+        self.table.tag_configure('Partly Processed', foreground='#8b4300', background='#fff4de')
+        self.table.tag_configure('Skipped', foreground='#8b4300', background='#fff4de')
+        self.table.tag_configure('Error', foreground='#a61b29', background='#fff0f0')
         self.table.bind('<<TreeviewSelect>>', self.show_details)
         self.detail = tk.Text(details, width=34, height=6, wrap='word', state='disabled',
                               font=('Segoe UI', 10), padx=12, pady=10, relief='flat')
@@ -127,6 +147,9 @@ class App(tk.Tk):
                 raise ValueError('Invalid saved settings.')
             self.keywords.insert('1.0', settings['keywords'])
             self.case.set(settings.get('case_sensitive') is True)
+            if isinstance(settings.get('safe_keywords'), str):
+                self.safe_keywords.insert('1.0', settings['safe_keywords'])
+            self.safe_case.set(settings.get('safe_case_sensitive') is True)
         except FileNotFoundError:
             pass
         except (OSError, ValueError):
@@ -137,7 +160,9 @@ class App(tk.Tk):
         try:
             self.settings_path.parent.mkdir(parents=True, exist_ok=True)
             settings = {'keywords': self.keywords.get('1.0', 'end-1c'),
-                        'case_sensitive': self.case.get()}
+                        'case_sensitive': self.case.get(),
+                        'safe_keywords': self.safe_keywords.get('1.0', 'end-1c'),
+                        'safe_case_sensitive': self.safe_case.get()}
             handle, temporary = tempfile.mkstemp(prefix='.settings-', dir=self.settings_path.parent)
             with os.fdopen(handle, 'w', encoding='utf-8') as stream:
                 json.dump(settings, stream, ensure_ascii=False, indent=2)
@@ -184,16 +209,16 @@ class App(tk.Tk):
         if not self.save_settings():
             return
         self.report = None
+        self.safe_report = None
+        self.table.heading('matches', text='Matches')
         self.running = True
         self.cancel.clear()
         self.table.delete(*self.table.get_children())
         self.set_details('Select a file to inspect match locations and review reasons.')
         self.state_text.set('Scanning — No Safety Result Yet')
         self.status.configure(foreground='#25334a')
-        for control in (self.scan_button, self.export_button, self.source_entry,
-                        self.browse_source, self.case_check):
-            control.configure(state='disabled')
-        self.keywords.configure(state='disabled')
+        self.lock(True)
+        self.export_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
         self.bar.start(12)
         source = self.source.get()
@@ -207,6 +232,93 @@ class App(tk.Tk):
                 self.events.put(('error', f'{type(exc).__name__}: {exc}'))
         threading.Thread(target=work, daemon=True).start()
 
+    def lock(self, busy):
+        state = 'disabled' if busy else 'normal'
+        for control in (self.scan_button, self.safe_button, self.source_entry, self.browse_source,
+                        self.case_check, self.safe_case_check, self.keywords, self.safe_keywords):
+            control.configure(state=state)
+
+    def start_safe(self):
+        if self.running:
+            return
+        try:
+            keys = Keywords(self.safe_keywords.get('1.0', 'end'), self.safe_case.get())
+            if not self.source.get().strip():
+                raise ValueError('Choose a source folder in tab 1.')
+            palindromes = keys.palindromes()
+            if palindromes:
+                raise ValueError('These keywords read the same backwards, so reversing cannot remove them: '
+                                 + ', '.join(palindromes))
+        except ValueError as exc:
+            messagebox.showerror('Cannot Start', str(exc))
+            return
+        pairs = ', '.join(f'{w} → {w[::-1]}' for w in keys.words[:5]) + (' …' if len(keys.words) > 5 else '')
+        if not messagebox.askyesno('Confirm MakeItSafe',
+                                   f'This rewrites matching files in place, with no backup:\n{self.source.get()}\n\n'
+                                   f'Every match is written backwards ({pairs}).\n\nContinue?', icon='warning'):
+            return
+        if not self.save_settings():
+            return
+        self.report = None
+        self.safe_report = None
+        self.table.heading('matches', text='Replaced')
+        self.running = True
+        self.cancel.clear()
+        self.table.delete(*self.table.get_children())
+        self.set_details('Select a file to see what was replaced.')
+        self.state_text.set('Processing — Files Are Being Changed')
+        self.status.configure(foreground='#25334a')
+        self.lock(True)
+        self.export_button.configure(state='disabled')
+        self.stop_button.configure(state='normal')
+        self.bar.start(12)
+        source = self.source.get()
+
+        def work():
+            try:
+                report = make_safe_folder(source, keys, self.cancel,
+                                          lambda n, p: self.events.put(('progress', (n, p))))
+                self.events.put(('safe_done', report))
+            except Exception as exc:
+                self.events.put(('error', f'{type(exc).__name__}: {exc}'))
+        threading.Thread(target=work, daemon=True).start()
+
+    def finish_safe(self, report):
+        self.running = False
+        self.bar.stop()
+        self.lock(False)
+        self.stop_button.configure(state='disabled')
+        self.safe_report = report
+        self.export_button.configure(state='normal')
+        count = {}
+        for item in report.files:
+            count[item.status] = count.get(item.status, 0) + 1
+        changed = count.get('Processed', 0) + count.get('Partly Processed', 0)
+        clean = not report.cancelled and not report.issues and not (
+            count.get('Partly Processed') or count.get('Error'))
+        if report.cancelled:
+            state = f'MakeItSafe Cancelled — {changed} Files Were Already Changed'
+        elif clean:
+            state = f'MakeItSafe Complete — {changed} Files Processed'
+        else:
+            state = f'MakeItSafe Finished — {changed} Files Processed, Review Remaining Items'
+        self.state_text.set(state)
+        self.status.configure(foreground='#11633a' if clean else '#a61b29')
+        self.progress_text.set(f'{len(report.files)} files · ' + ' · '.join(
+            f'{count.get(s, 0)} {s}' for s in ('Processed', 'Partly Processed', 'Skipped', 'Unchanged', 'Error')))
+        for i, item in enumerate(report.files):
+            self.table.insert('', 'end', iid=str(i), values=(item.status, item.path,
+                              sum(item.replaced.values())), tags=(item.status,))
+        for i, issue in enumerate(report.issues):
+            self.table.insert('', 0, iid=f'issue-{i}', values=('Error', issue, ''), tags=('Error',))
+        lines = ['MakeItSafe folder:', report.source, '', 'Replacements:']
+        for word, total in report.totals.items():
+            files = sum(word in item.replaced for item in report.files)
+            lines.append(f'"{word}" has been replaced with "{word[::-1]}": {total} time(s) in {files} file(s)')
+        lines.extend(['', 'Select a file to see what was replaced. Run a scan with the original words '
+                      'to confirm nothing remains.'])
+        self.set_details('\n'.join(lines))
+
     def poll(self):
         latest = None
         while True:
@@ -216,6 +328,9 @@ class App(tk.Tk):
                 break
             if kind == 'progress':
                 latest = value
+            elif kind == 'safe_done':
+                latest = None
+                self.finish_safe(value)
             else:
                 latest = None
                 self.finish(kind, value)
@@ -226,9 +341,7 @@ class App(tk.Tk):
     def finish(self, kind, value):
         self.running = False
         self.bar.stop()
-        for control in (self.scan_button, self.source_entry, self.browse_source, self.case_check):
-            control.configure(state='normal')
-        self.keywords.configure(state='normal')
+        self.lock(False)
         self.stop_button.configure(state='disabled')
         if kind == 'error':
             self.state_text.set('Scan Incomplete — Unable To Finish')
@@ -259,7 +372,7 @@ class App(tk.Tk):
             position += 1
         self.set_details('Scanned folder:\n' + value.source +
                          '\n\nSelect a failed file to see keyword locations or inspection issues. '
-                         'Resolve files manually, then scan again.\n\nFiles are never modified. '
+                         'Resolve files manually, then scan again.\n\nScanning never modifies files. '
                          'Reports include matched keyword names and may contain sensitive terms and paths.')
 
     def set_details(self, text):
@@ -270,6 +383,9 @@ class App(tk.Tk):
 
     def show_details(self, _=None):
         selection = self.table.selection()
+        if self.safe_report and selection:
+            self.show_safe_details(selection[0])
+            return
         if not selection or not self.report:
             return
         key = selection[0]
@@ -294,19 +410,33 @@ class App(tk.Tk):
             lines.extend(['', 'Review this file manually, resolve keyword matches, then scan again.'])
         self.set_details('\n'.join(lines))
 
+    def show_safe_details(self, key):
+        if key.startswith('issue-'):
+            self.set_details('Status: Error\nReason: ' + self.safe_report.issues[int(key.split('-')[1])])
+            return
+        item = self.safe_report.files[int(key)]
+        lines = [item.path, '', 'Status: ' + item.status, '', 'Replaced:']
+        lines.extend(f'"{w}" has been replaced with "{w[::-1]}": {n} time(s)' for w, n in item.replaced.items())
+        if not item.replaced:
+            lines.append('Nothing.')
+        if item.issues:
+            lines.extend(['', 'Notes:'] + item.issues)
+        self.set_details('\n'.join(lines))
+
     def export(self):
-        if not self.report:
+        current = self.safe_report or self.report
+        if not current:
             return
         path = filedialog.asksaveasfilename(title='Save Report Outside Scanned Folder',
-                                          defaultextension='.json', initialfile='keyword-report.json',
+                                          defaultextension='.json', initialfile='makeitsafe-report.json' if self.safe_report else 'keyword-report.json',
                                           filetypes=[('JSON report', '*.json')])
         if path:
             try:
                 target = Path(path).resolve()
-                folder = Path(self.report.source)
+                folder = Path(current.source)
                 if target == folder or folder in target.parents:
                     raise ValueError('Save reports outside the source folder; reports can contain sensitive paths.')
-                self.report.save(target)
+                current.save(target)
             except Exception as exc:
                 messagebox.showerror('Cannot Save Report', str(exc))
 

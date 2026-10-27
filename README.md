@@ -2,6 +2,8 @@
 
 Offline Windows desktop keyword scanner. Choose a source folder, enter comma-separated keywords, and select **Scan Folder**. Matching files appear first with **Failed** status. Files with no keyword matches show **OK**. Unreadable or unsupported files show **Not Scanned**. Select a failed file for locations and reasons, resolve it manually, and scan again. SafeLoad never edits, copies, deletes, cleans or redacts source files.
 
+**MakeItSafe (tab 3):** enter the keywords to neutralise and select **MakeItSafe Folder**. After a confirmation, SafeLoad rewrites matching text, Word, Excel and PowerPoint files in the source folder in place, writing every match backwards (`git` becomes `tig`, `business` becomes `ssenisub`; case is kept). The result list shows each file and a summary such as "git has been replaced with tig". Keywords that read the same backwards cannot be used. PDFs, images and other formats are skipped and reported, file and folder names are never renamed, and no backup is kept; run MakeItSafe again with the reversed words to undo, or scan again to confirm nothing remains.
+
 ## Install On Windows With One Command
 
 See the [Windows Installation Guide](INSTALL.md) for the full setup, offline installation, saved settings, App Control troubleshooting, and an implementation comparison with AskAi.

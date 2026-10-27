@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import codecs
+import copy
 import io
 import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
+import tempfile
 import threading
 import zipfile
 from dataclasses import asdict, dataclass, field
@@ -81,7 +84,27 @@ class Keywords:
         if len(self.words) > 500 or any(len(w) > 500 for w in self.words):
             raise ValueError('Use at most 500 keywords, each at most 500 characters.')
         flags = 0 if case_sensitive else re.IGNORECASE
+        self.case_sensitive = case_sensitive
         self.patterns = [re.compile(re.escape(w), flags) for w in self.words]
+
+    def palindromes(self):
+        """Keywords that read the same backwards; reversing them removes nothing."""
+        fold = (lambda w: w) if self.case_sensitive else str.lower
+        return [w for w in self.words if fold(w) == fold(w)[::-1]]
+
+    def reverse(self, text):
+        """Return text with every keyword match written backwards, plus per-keyword counts."""
+        found = sorted(self.ranges(text), key=lambda r: (r[1], r[1] - r[2]))
+        out, counts, position = [], {}, 0
+        for index, start, end in found:
+            if start < position:
+                continue  # overlaps a match that was already reversed
+            out.append(text[position:start])
+            out.append(text[start:end][::-1])
+            counts[index] = counts.get(index, 0) + 1
+            position = end
+        out.append(text[position:])
+        return ''.join(out), counts
 
     def ranges(self, text):
         # Look ahead one character after every match so overlapping matches count.
@@ -118,6 +141,33 @@ def decode_text(data):
     return value, 'utf-8'
 
 
+def parse_xml(content):
+    parser = etree.XMLParser(resolve_entities=False, no_network=True,
+                             remove_blank_text=False, strip_cdata=False)
+    tree = etree.fromstring(content, parser)
+    if tree.getroottree().docinfo.doctype:
+        raise ValueError('XML document type declarations are not supported.')
+    return tree
+
+
+def text_groups(nodes):
+    """Paragraphs and spreadsheet strings: terms may be split across runs."""
+    groups, used = [], set()
+    for node in nodes:
+        if not isinstance(node.tag, str):
+            continue
+        local = etree.QName(node).localname
+        if local in {'p', 'si', 'is'}:
+            texts = [n for n in node.iter() if isinstance(n.tag, str)
+                     and etree.QName(n).localname == 't' and n.text is not None
+                     and n not in used]
+            if texts:
+                groups.append(texts)
+                used.update(texts)
+    groups.extend([n] for n in nodes if n not in used and n.text)
+    return groups
+
+
 def office(data, suffix, keys):
     result = Inspection()
     with zipfile.ZipFile(io.BytesIO(data)) as package:
@@ -139,26 +189,9 @@ def office(data, suffix, keys):
             if entry.extra or entry.comment:
                 result.issues.append('ZIP extra data/comment requires review: ' + name)
             if name.endswith(('.xml', '.rels')):
-                parser = etree.XMLParser(resolve_entities=False, no_network=True,
-                                         remove_blank_text=False, strip_cdata=False)
-                tree = etree.fromstring(content, parser)
-                if tree.getroottree().docinfo.doctype:
-                    raise ValueError('XML document type declarations are not supported.')
+                tree = parse_xml(content)
                 nodes = list(tree.iter())
-                # Paragraphs and spreadsheet strings: detect terms split across runs.
-                groups, used = [], set()
-                for node in nodes:
-                    if not isinstance(node.tag, str):
-                        continue
-                    local = etree.QName(node).localname
-                    if local in {'p', 'si', 'is'}:
-                        texts = [n for n in node.iter() if isinstance(n.tag, str)
-                                 and etree.QName(n).localname == 't' and n.text is not None
-                                 and n not in used]
-                        if texts:
-                            groups.append(texts)
-                            used.update(texts)
-                groups.extend([n] for n in nodes if n not in used and n.text)
+                groups = text_groups(nodes)
                 for number, group in enumerate(groups, 1):
                     text = ''.join(n.text or '' for n in group)
                     location = f'{name}: text group {number}'
@@ -335,4 +368,234 @@ def scan_folder(source, keys, cancel=None, progress=None):
     # Actual keyword matches first, inspection failures next, OK files last.
     status_order = {'Failed': 0, 'Not Scanned': 1, 'OK': 2}
     report.files.sort(key=lambda item: (status_order[item.status], item.path.casefold()))
+    return report
+
+
+# ---------------------------------------------------------------- MakeItSafe
+# Rewrites files in place: every keyword match is written backwards ("git" -> "tig").
+# Reversal keeps text length, so Office text split across runs can be redistributed exactly.
+BOMS = [(codecs.BOM_UTF32_LE, 'utf-32-le'), (codecs.BOM_UTF32_BE, 'utf-32-be'),
+        (codecs.BOM_UTF8, 'utf-8'), (codecs.BOM_UTF16_LE, 'utf-16-le'),
+        (codecs.BOM_UTF16_BE, 'utf-16-be')]
+KEEP_ATTRIBUTES = {'Type', 'ContentType', 'Extension', 'PartName'}  # package structure
+KEEP_PARTS = {'[Content_Types].xml'}
+STILL = 'Keyword still present: '
+
+
+@dataclass
+class SafeFile:
+    path: str
+    status: str  # Processed, Partly Processed, Unchanged, Skipped or Error
+    replaced: dict[str, int] = field(default_factory=dict)
+    issues: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SafeReport:
+    source: str
+    started: str
+    words: list[str]
+    files: list[SafeFile] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
+    cancelled: bool = False
+
+    @property
+    def totals(self):
+        totals = {w: 0 for w in self.words}
+        for item in self.files:
+            for word, number in item.replaced.items():
+                totals[word] += number
+        return totals
+
+    def save(self, path: Path):
+        body = asdict(self)
+        body['totals'] = self.totals
+        body['scope'] = ('Files were rewritten in place; every keyword match was written backwards. '
+                         'Report terms and paths may contain sensitive information.')
+        path.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def remaining(inspection):
+    return list(dict.fromkeys(f'{STILL}{h.keyword_text} · {h.location}' for h in inspection.hits))[:20]
+
+
+def safe_text(data, keys):
+    bom, codec = next(((b, c) for b, c in BOMS if data.startswith(b)), (b'', 'utf-8'))
+    text, _ = decode_text(data)
+    new, counts = keys.reverse(text)
+    if not counts:
+        return None, counts, []
+    left = Inspection()
+    for index, start, _ in keys.ranges(new):
+        left.hits.append(Hit(index, f'Line {new.count(chr(10), 0, start) + 1}', 1, keys.words[index - 1]))
+    return bom + new.encode(codec), counts, remaining(left)
+
+
+def safe_xml(content, keys):
+    tree = parse_xml(content)
+    nodes = list(tree.iter())
+    counts = {}
+
+    def reverse(text):
+        new, found = keys.reverse(text)
+        for index, number in found.items():
+            counts[index] = counts.get(index, 0) + number
+        return new
+
+    for group in text_groups(nodes):
+        text = ''.join(n.text or '' for n in group)
+        new = reverse(text)
+        if new != text:
+            position = 0
+            for node in group:
+                size = len(node.text or '')
+                node.text = new[position:position + size]
+                position += size
+    for node in nodes:
+        if isinstance(node.tag, str):
+            for attr, value in list(node.attrib.items()):
+                if etree.QName(attr).localname not in KEEP_ATTRIBUTES:
+                    new = reverse(value)
+                    if new != value:
+                        node.set(attr, new)
+        if node.tail:
+            node.tail = reverse(node.tail)
+    if not counts:
+        return None, counts
+    info = tree.getroottree().docinfo
+    return etree.tostring(tree.getroottree(), xml_declaration=True, encoding=info.encoding or 'UTF-8',
+                          standalone=info.standalone), counts
+
+
+def safe_office(data, suffix, keys):
+    counts, issues, changed = {}, [], {}
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        entries = package.infolist()
+        if len(entries) > 10000 or sum(e.file_size for e in entries) > MAX_PACKAGE:
+            raise ValueError('Office package exceeds size limits.')
+        names = [e.filename for e in entries]
+        if len(names) != len(set(names)) or OFFICE[suffix] not in names:
+            raise ValueError('Invalid or ambiguous Office package.')
+        media = False
+        for entry in entries:
+            if entry.flag_bits & 1:
+                raise ValueError('Encrypted package entry cannot be changed.')
+            if entry.filename.endswith(('.xml', '.rels')) and entry.filename not in KEEP_PARTS:
+                new, found = safe_xml(package.read(entry), keys)
+                for index, number in found.items():
+                    counts[index] = counts.get(index, 0) + number
+                if new is not None:
+                    changed[entry.filename] = new
+            elif entry.file_size and not entry.is_dir():
+                media = True
+        if not changed:
+            return None, counts, issues
+        if media:
+            issues.append('Embedded media, macro or binary parts were not changed.')
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, 'w') as target:
+            target.comment = package.comment
+            for entry in entries:
+                content = changed[entry.filename] if entry.filename in changed else package.read(entry)
+                target.writestr(copy.copy(entry), content)
+    new = output.getvalue()
+    issues.extend(remaining(office(new, suffix, keys)))
+    return new, counts, issues
+
+
+def write_atomic(path, data):
+    handle, temporary = tempfile.mkstemp(prefix='.safeload-', dir=path.parent)
+    try:
+        with os.fdopen(handle, 'wb') as stream:
+            stream.write(data)
+        shutil.copymode(path, temporary)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def make_safe_file(path, relative, keys):
+    """Return a SafeFile for one file, rewriting it when keywords were found."""
+    item = SafeFile(str(relative), 'Unchanged')
+    named = Inspection()
+    keys.inspect(str(relative), 'File or directory name', named)
+    if named.hits:
+        item.issues.append('File or folder name contains a keyword; rename it manually.')
+    try:
+        info = path.stat()
+        if is_link(path) or not stat.S_ISREG(info.st_mode):
+            raise ValueError('Linked or special file not changed.')
+        if info.st_size > MAX_FILE:
+            raise ValueError('File exceeds 100 MiB limit.')
+        data = path.read_bytes()
+        suffix = path.suffix.lower()
+        if data.startswith(b'%PDF-') or suffix == '.pdf':
+            item.status = 'Skipped'
+            item.issues.append('PDF files cannot be rewritten safely; review manually.')
+            return item
+        if suffix in OFFICE:
+            new, counts, left = safe_office(data, suffix, keys)
+        elif suffix in TEXT_EXTENSIONS or path.name.lower() in TEXT_EXTENSIONS or not suffix:
+            new, counts, left = safe_text(data, keys)
+        else:
+            item.status = 'Skipped'
+            item.issues.append(f'Unsupported file type: {suffix}. Not changed.')
+            return item
+        if new is not None:
+            after = path.stat()
+            if (info.st_size, info.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
+                raise ValueError('File changed while processing; nothing was written. Retry with files closed.')
+            write_atomic(path, new)
+            item.replaced = {keys.words[i - 1]: n for i, n in sorted(counts.items())}
+            item.status = 'Processed'
+        item.issues.extend(left)
+    except Exception as exc:
+        item.status = 'Error'
+        item.issues.append(f'{type(exc).__name__}: {exc}')
+    if item.status in ('Processed', 'Unchanged') and (
+            named.hits or any(i.startswith(STILL) for i in item.issues)):
+        item.status = 'Partly Processed'
+    return item
+
+
+def make_safe_folder(source, keys, cancel=None, progress=None):
+    palindromes = keys.palindromes()
+    if palindromes:
+        raise ValueError('These keywords read the same backwards, so reversing cannot remove them: '
+                         + ', '.join(palindromes))
+    source = Path(source).absolute()
+    if not source.is_dir() or is_link(source):
+        raise ValueError('Choose an existing, non-linked directory.')
+    source = source.resolve()
+    report = SafeReport(str(source), datetime.now(timezone.utc).isoformat(), list(keys.words))
+    cancel = cancel or threading.Event()
+
+    def error(exc):
+        report.issues.append(f'Cannot enumerate directory: {exc.filename} ({type(exc).__name__})')
+
+    for directory, folders, files in os.walk(source, followlinks=False, onerror=error):
+        parent = Path(directory)
+        for folder in list(folders):
+            try:
+                if is_link(parent / folder):
+                    folders.remove(folder)
+                    report.issues.append('Linked directory not changed: ' + str((parent / folder).relative_to(source)))
+            except OSError as exc:
+                folders.remove(folder)
+                error(exc)
+        for filename in sorted(files):
+            if cancel.is_set():
+                report.cancelled = True
+                break
+            path = parent / filename
+            report.files.append(make_safe_file(path, path.relative_to(source), keys))
+            if progress:
+                progress(len(report.files), str(path.relative_to(source)))
+        if report.cancelled:
+            break
+    if not report.files and not report.cancelled:
+        report.issues.append('No files found.')
+    order = {'Error': 0, 'Partly Processed': 1, 'Processed': 2, 'Skipped': 3, 'Unchanged': 4}
+    report.files.sort(key=lambda item: (order[item.status], item.path.casefold()))
     return report

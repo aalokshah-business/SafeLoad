@@ -3,6 +3,7 @@ import json
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from tkinter import ttk
 from app import App
 from scanner import FileResult, Hit, Report
@@ -149,7 +150,8 @@ class KeywordSettingsTests(unittest.TestCase):
                 app.after_cancel(callback)
             app.close()
             self.assertEqual(json.loads(path.read_text(encoding='utf-8')),
-                             {'keywords': text, 'case_sensitive': True})
+                             {'keywords': text, 'case_sensitive': True,
+                              'safe_keywords': '', 'safe_case_sensitive': False})
             reopened = App(settings_path=path)
             reopened.withdraw()
             try:
@@ -169,6 +171,40 @@ class KeywordSettingsTests(unittest.TestCase):
             try:
                 self.assertEqual(app.keywords.get('1.0', 'end-1c'), '')
                 self.assertIn('Could Not Be Loaded', app.progress_text.get())
+            finally:
+                close_app(app)
+
+    def test_makeitsafe_tab_rewrites_folder_and_reports_replacements(self):
+        base = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as folder:
+            root = Path(folder)
+            (root / 'a.txt').write_text('git and business and git')
+            (root / 'b.txt').write_text('clean')
+            app = make_app()
+            app.withdraw()
+            try:
+                self.assertEqual(app.safe_button.cget('text'), 'MakeItSafe Folder')
+                app.source.set(str(root))
+                app.safe_keywords.insert('1.0', 'git, business')
+                app.update()
+                with patch('app.messagebox.askyesno', return_value=False):
+                    app.safe_button.invoke()
+                self.assertEqual((root / 'a.txt').read_text(), 'git and business and git')
+                with patch('app.messagebox.askyesno', return_value=True):
+                    app.safe_button.invoke()
+                deadline = time.monotonic() + 10
+                while app.running and time.monotonic() < deadline:
+                    app.update()
+                    time.sleep(.01)
+                self.assertFalse(app.running)
+                self.assertEqual((root / 'a.txt').read_text(), 'tig and ssenisub and tig')
+                rows = [app.table.item(i, 'values') for i in app.table.get_children()]
+                self.assertEqual(rows[0][:2], ('Processed', 'a.txt'))
+                self.assertEqual(str(rows[0][2]), '3')
+                details = app.detail.get('1.0', 'end')
+                self.assertIn('"git" has been replaced with "tig": 2 time(s) in 1 file(s)', details)
+                self.assertIn('"business" has been replaced with "ssenisub"', details)
             finally:
                 close_app(app)
 

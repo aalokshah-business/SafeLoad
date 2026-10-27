@@ -8,7 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 import pymupdf
-from scanner import Keywords, inspect_file, scan_folder
+from scanner import Keywords, inspect_file, make_safe_folder, scan_folder
 
 TEST_TMP = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
 TEST_TMP.mkdir(parents=True, exist_ok=True)
@@ -165,3 +165,58 @@ class ScannerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class MakeItSafeTests(unittest.TestCase):
+    def test_reverse_overlaps_case_and_palindromes(self):
+        keys = Keywords('git, business')
+        self.assertEqual(keys.reverse('Git business GIT'), ('tiG ssenisub TIG', {1: 2, 2: 1}))
+        self.assertEqual(Keywords('aba, bab').reverse('abab')[0], 'abab')
+        self.assertEqual(Keywords('abc, Aba').palindromes(), ['Aba'])
+        self.assertEqual(Keywords('Aba', True).palindromes(), [])
+
+    def test_folder_rewrites_text_office_and_leaves_rest(self):
+        body = ('<root><p><r><t>Use gi</t></r><r><t>t here</t></r></p>'
+                '<link target="https://github.com/x"/></root>')
+        docx = package('word/document.xml', body, {'word/media/a.png': b'png'})
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'sub').mkdir()
+            (root / 'a.txt').write_bytes('Git\r\nbusiness'.encode('utf-16'))
+            (root / 'sub' / 'b.txt').write_text('clean')
+            (root / 'c.docx').write_bytes(docx)
+            (root / 'd.bin').write_bytes(b'git')
+            keys = Keywords('git, business')
+            report = make_safe_folder(root, keys)
+            status = {f.path: f for f in report.files}
+            self.assertEqual(status['a.txt'].replaced, {'git': 1, 'business': 1})
+            self.assertEqual(status['c.docx'].replaced, {'git': 2})
+            self.assertEqual(status[str(Path('sub/b.txt'))].status, 'Unchanged')
+            self.assertEqual(status['d.bin'].status, 'Skipped')
+            self.assertEqual(report.totals, {'git': 3, 'business': 1})
+            self.assertEqual((root / 'a.txt').read_bytes(), 'tiG\r\nssenisub'.encode('utf-16'))
+            self.assertEqual((root / 'd.bin').read_bytes(), b'git')
+            with zipfile.ZipFile(root / 'c.docx') as z:
+                text = z.read('word/document.xml').decode()
+                self.assertIn('Use ti', text)
+                self.assertIn('g here', text)
+                self.assertIn('tighub.com', text)
+                self.assertEqual(z.read('word/media/a.png'), b'png')
+            self.assertFalse(scan_folder(root, keys).files[0].status == 'Failed' and
+                             any(f.status == 'Failed' and f.path != 'd.bin' for f in scan_folder(root, keys).files))
+            self.assertFalse(list(root.rglob('.safeload-*')))
+
+    def test_still_present_name_hits_and_cancel(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            (root / 'git.txt').write_text('git tig')
+            report = make_safe_folder(root, Keywords('git, tig'))
+            self.assertEqual(report.files[0].status, 'Partly Processed')
+            self.assertTrue(any('still present' in i for i in report.files[0].issues))
+            self.assertTrue(any('name contains' in i for i in report.files[0].issues))
+            cancel = threading.Event()
+            cancel.set()
+            self.assertTrue(make_safe_folder(root, Keywords('git'), cancel).cancelled)
+            with self.assertRaises(ValueError):
+                make_safe_folder(root, Keywords('abba'))
+

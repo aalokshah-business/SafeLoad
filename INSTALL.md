@@ -4,7 +4,7 @@
 
 SafeLoad supports Windows 10/11 x64. The standard installer needs PowerShell, access to GitHub, and permission to write to your own Windows profile. It does not require Python, Git, Microsoft Office, or administrator rights. Windows and office application-control rules still determine whether the installed executable may run.
 
-The app scans locally and never modifies the files being checked. Installation downloads application files; folder scans and saved keywords are not uploaded.
+The app works locally. Scanning (tabs 1 and 2) never modifies the files being checked; the MakeItSafe tab (tab 3) rewrites files in place only when you click MakeItSafe Folder and confirm. Installation downloads application files; folder scans and saved keywords are not uploaded.
 
 ## One-Command Installation
 
