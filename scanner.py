@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from lxml import etree
 import pymupdf
 
+import legacy
+
 MAX_FILE = 100 * 1024 * 1024
 MAX_PACKAGE = 250 * 1024 * 1024
 MAX_MATCHES = 100000
@@ -233,6 +235,15 @@ def office(data, suffix, keys):
     return result
 
 
+def legacy_inspect(data, suffix, keys):
+    result = Inspection()
+    for location, text in legacy.texts(data, suffix):
+        keys.inspect(text, location, result)
+    result.issues.append('Old binary format: text read from document structures and raw bytes; '
+                         'embedded objects are not inspected.')
+    return result
+
+
 def pdf(data, keys):
     result = Inspection()
     with pymupdf.open(stream=data, filetype='pdf') as doc:
@@ -264,6 +275,8 @@ def inspect_file(data, path, keys):
         return pdf(data, keys)
     if suffix in OFFICE:
         return office(data, suffix, keys)
+    if suffix in legacy.LEGACY:
+        return legacy_inspect(data, suffix, keys)
     if suffix not in TEXT_EXTENSIONS and path.name.lower() not in TEXT_EXTENSIONS and suffix:
         raise ValueError(f'Unsupported file type: {suffix}. No text reader is available for this format.')
     text, _ = decode_text(data)
@@ -753,6 +766,18 @@ def safe_office(data, suffix, plan):
     return new, counts, removed, issues
 
 
+def safe_legacy(data, suffix, plan):
+    """Edit an old binary Office file (.doc, .xls, .ppt) in place at the same length."""
+    new, counts, removed, left = legacy.edit(data, suffix, plan.reverse, plan.clean, plan.check)
+    if new is None:
+        return None, counts, removed, []
+    issues = ['Old binary format edited in place: embedded objects and formatting are not changed.']
+    if removed:
+        issues.append('Removed lines were blanked with spaces; the old format cannot delete text safely.')
+    issues.extend(f'{STILL}{word} · {where}' for word, where in left[:20])
+    return new, counts, removed, issues
+
+
 def write_atomic(path, data):
     handle, temporary = tempfile.mkstemp(prefix='.safeload-', dir=path.parent)
     try:
@@ -784,6 +809,8 @@ def make_safe_file(path, relative, plan):
             new, counts, removed, left = safe_pdf(data, plan)
         elif suffix in OFFICE:
             new, counts, removed, left = safe_office(data, suffix, plan)
+        elif suffix in legacy.LEGACY:
+            new, counts, removed, left = safe_legacy(data, suffix, plan)
         elif suffix in TEXT_EXTENSIONS or path.name.lower() in TEXT_EXTENSIONS or not suffix:
             new, counts, removed, left = safe_text(data, plan)
         else:

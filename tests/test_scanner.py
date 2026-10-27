@@ -8,6 +8,7 @@ from unittest.mock import patch
 import zipfile
 
 import pymupdf
+import legacy
 from scanner import Keywords, Plan, inspect_file, make_safe_folder, scan_folder
 
 TEST_TMP = Path(__file__).resolve().parents[1] / 'tmp' / 'tests'
@@ -305,3 +306,39 @@ class MakeItSafeTests(unittest.TestCase):
             report = make_safe_folder(root, Plan('git', 'github'))
             self.assertEqual({f.status for f in report.files}, {'Processed'})
             self.assertEqual((root / 'b.mdc').read_text(), 'const tig = 1\n')
+
+FIXTURES = Path(__file__).resolve().parent / 'fixtures'
+
+
+class OldOfficeTests(unittest.TestCase):
+    """legacy.doc, legacy.xls and legacy.ppt were saved by real Word, Excel and PowerPoint."""
+
+    def test_scan_reads_text_of_old_formats(self):
+        for name in ('legacy.doc', 'legacy.xls', 'legacy.ppt'):
+            with self.subTest(name=name):
+                result = inspect_file((FIXTURES / name).read_bytes(), Path(name), Keywords('github'))
+                self.assertTrue(any(not h.location.startswith('Raw bytes') for h in result.hits))
+
+    def test_make_safe_edits_old_formats_in_place_at_same_size(self):
+        with tempfile.TemporaryDirectory(dir=TEST_TMP) as directory:
+            root = Path(directory)
+            sizes = {}
+            for name in ('legacy.doc', 'legacy.xls', 'legacy.ppt'):
+                (root / name).write_bytes((FIXTURES / name).read_bytes())
+                sizes[name] = (root / name).stat().st_size
+            plan = Plan('git, business', 'github')
+            report = make_safe_folder(root, plan)
+            for item in report.files:
+                with self.subTest(name=item.path):
+                    self.assertEqual(item.status, 'Processed', item.issues)
+                    self.assertEqual(item.removed, {'github': 1})
+                    self.assertEqual(item.replaced['business'], 2)
+                    self.assertGreaterEqual(item.replaced['git'], 2)
+                    self.assertEqual((root / item.path).stat().st_size, sizes[item.path])
+                    joined = '\n'.join(t for where, t in legacy.texts((root / item.path).read_bytes(),
+                                                                       Path(item.path).suffix)
+                                       if not where.startswith('Raw'))
+                    self.assertIn('Use tig for source control', joined)
+                    self.assertIn('ssenisub', joined)
+                    self.assertNotIn('github', joined.lower())
+            self.assertTrue(all(f.status == 'OK' for f in scan_folder(root, plan.check).files))

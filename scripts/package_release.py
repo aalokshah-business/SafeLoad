@@ -18,7 +18,7 @@ if not (bundle / 'SafeLoad.exe').is_file():
     parser.error('Build dist/SafeLoad/SafeLoad.exe before packaging.')
 source = bundle / 'Source'
 source.mkdir(exist_ok=True)
-for name in ('app.py', 'scanner.py', 'requirements.txt', 'README.md', 'INSTALL.md', 'LICENSE', 'install.ps1',
+for name in ('app.py', 'scanner.py', 'legacy.py', 'requirements.txt', 'README.md', 'INSTALL.md', 'LICENSE', 'install.ps1',
              'Start SafeLoad.cmd', 'Build Windows App.cmd'):
     shutil.copy2(root / name, source / name)
 for name in ('tests', 'scripts', 'assets'):
