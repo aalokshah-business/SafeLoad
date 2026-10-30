@@ -17,7 +17,6 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 
 from lxml import etree
-import pymupdf
 
 import legacy
 
@@ -244,7 +243,19 @@ def legacy_inspect(data, suffix, keys):
     return result
 
 
+def pdf_lib():
+    """Load PyMuPDF on first PDF use. A blocked native library must not stop startup."""
+    try:
+        import pymupdf
+    except (ImportError, OSError) as exc:
+        raise ValueError(
+            'PDF support is unavailable because Windows Application Control blocked the PDF component.'
+        ) from exc
+    return pymupdf
+
+
 def pdf(data, keys):
+    pymupdf = pdf_lib()
     result = Inspection()
     with pymupdf.open(stream=data, filetype='pdf') as doc:
         if doc.needs_pass:
@@ -683,6 +694,7 @@ def pdf_lines(page):
 
 
 def union(chars):
+    pymupdf = pdf_lib()
     rect = pymupdf.Rect(chars[0][0])
     for char in chars[1:]:
         rect |= pymupdf.Rect(char[0])
@@ -691,6 +703,7 @@ def union(chars):
 
 def safe_pdf(data, plan):
     """Remove matching text lines and rewrite matches backwards, using PDF redaction."""
+    pymupdf = pdf_lib()
     counts, removed, issues = {}, {}, ['PDF: images, outlined text, form fields and attachments are not changed.']
     with pymupdf.open(stream=data, filetype='pdf') as doc:
         if doc.needs_pass:

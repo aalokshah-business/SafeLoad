@@ -10,6 +10,11 @@ from tkinter import filedialog, messagebox, ttk
 
 from scanner import Keywords, Plan, make_safe_folder, make_safe_text, scan_folder, scan_text
 
+BG = '#d7ebf8'
+PANEL = '#eef7fd'
+INK = '#1a3d5c'
+WASH = '#c5e2f6'
+
 
 class App(tk.Tk):
     def __init__(self, settings_path=None):
@@ -24,17 +29,26 @@ class App(tk.Tk):
         height = min(780, self.winfo_screenheight() - 100)
         self.geometry(f'{width}x{height}')
         self.minsize(min(920, width), min(660, height))
-        self.configure(bg='#eef2f7')
+        self.configure(bg=BG)
         style = ttk.Style(self)
         style.theme_use('clam')
-        style.configure('.', font=('Segoe UI', 10))
-        style.configure('TFrame', background='#eef2f7')
-        style.configure('TLabel', background='#eef2f7', foreground='#25334a')
-        style.configure('Title.TLabel', font=('Segoe UI', 23, 'bold'))
-        style.configure('Status.TLabel', font=('Segoe UI', 13, 'bold'), padding=(8, 6))
-        style.configure('TButton', padding=(12, 7))
-        style.configure('TNotebook.Tab', padding=(16, 6))
-        style.configure('Treeview', rowheight=29)
+        style.configure('.', font=('Segoe UI', 10), background=BG, foreground=INK)
+        style.configure('TFrame', background=BG)
+        style.configure('TLabel', background=BG, foreground=INK)
+        style.configure('Title.TLabel', font=('Segoe UI', 23, 'bold'), background=BG, foreground=INK)
+        style.configure('Status.TLabel', font=('Segoe UI', 13, 'bold'), padding=(8, 6), background=BG, foreground=INK)
+        style.configure('TButton', padding=(12, 7), background=WASH, foreground=INK)
+        style.map('TButton', background=[('active', '#b7d7f2'), ('disabled', '#e4eef6')])
+        style.configure('TCheckbutton', background=BG, foreground=INK)
+        style.configure('TEntry', fieldbackground=PANEL, foreground=INK)
+        style.configure('TNotebook', background=BG, borderwidth=0)
+        style.configure('TNotebook.Tab', padding=(16, 6), background=WASH, foreground=INK)
+        style.map('TNotebook.Tab', background=[('selected', PANEL)], foreground=[('selected', INK)])
+        style.configure('TPanedwindow', background=BG)
+        style.configure('TProgressbar', background='#7eb6e0', troughcolor=WASH)
+        style.configure('Treeview', rowheight=29, background=PANEL, fieldbackground=PANEL, foreground=INK)
+        style.configure('Treeview.Heading', background=WASH, foreground=INK)
+        style.configure('TScrollbar', background=WASH, troughcolor=BG)
         self.events = queue.Queue()
         self.cancel = threading.Event()
         self.report = None
@@ -78,16 +92,19 @@ class App(tk.Tk):
         ttk.Label(keyword_header, text='Keywords Or Phrases, Separated By Commas').pack(side='left')
         self.case_check = ttk.Checkbutton(keyword_header, text='Case-Sensitive Matching', variable=self.case)
         self.case_check.pack(side='right')
-        self.keywords = tk.Text(keywords, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.keywords = tk.Text(keywords, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1,
+                                bg=PANEL, fg=INK, insertbackground=INK)
         self.keywords.pack(fill='x', pady=4)
         ttk.Label(keywords, text='Literal substring matches, including inside longer words. Commas separate entries; no regex.').pack(anchor='w', pady=(4, 0))
         makesafe.columnconfigure(0, weight=1, uniform='safe')
         makesafe.columnconfigure(1, weight=1, uniform='safe')
         ttk.Label(makesafe, text='Reverse These Keywords (git → tig)').grid(row=0, column=0, sticky='w')
         ttk.Label(makesafe, text='Remove Every Line Containing These Keywords').grid(row=0, column=1, sticky='w', padx=(12, 0))
-        self.safe_keywords = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.safe_keywords = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1,
+                                     bg=PANEL, fg=INK, insertbackground=INK)
         self.safe_keywords.grid(row=1, column=0, sticky='ew', pady=4)
-        self.safe_clean = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1)
+        self.safe_clean = tk.Text(makesafe, height=2, font=('Segoe UI', 11), wrap='word', relief='solid', bd=1,
+                                  bg=PANEL, fg=INK, insertbackground=INK)
         self.safe_clean.grid(row=1, column=1, sticky='ew', pady=4, padx=(12, 0))
         safe_row = ttk.Frame(makesafe)
         safe_row.grid(row=2, column=0, columnspan=2, sticky='ew')
@@ -130,7 +147,7 @@ class App(tk.Tk):
         panes.add(details, weight=2)
         self.raw_frame = ttk.Frame(panes)
         self.raw_text = tk.Text(self.raw_frame, wrap='word', undo=True, maxundo=-1, font=('Consolas', 10),
-                                relief='solid', bd=1, padx=8, pady=6)
+                                relief='solid', bd=1, padx=8, pady=6, bg=PANEL, fg=INK, insertbackground=INK)
         raw_scroll = ttk.Scrollbar(self.raw_frame, command=self.raw_text.yview)
         self.raw_text.configure(yscrollcommand=raw_scroll.set)
         raw_scroll.pack(side='right', fill='y')
@@ -159,7 +176,8 @@ class App(tk.Tk):
         self.table.tag_configure('Error', foreground='#a61b29', background='#fff0f0')
         self.table.bind('<<TreeviewSelect>>', self.show_details)
         self.detail = tk.Text(details, width=34, height=6, wrap='word', state='disabled',
-                              font=('Segoe UI', 10), padx=12, pady=10, relief='flat')
+                              font=('Segoe UI', 10), padx=12, pady=10, relief='flat',
+                              bg=PANEL, fg=INK, insertbackground=INK)
         detail_scroll = ttk.Scrollbar(details, command=self.detail.yview)
         self.detail.configure(yscrollcommand=detail_scroll.set)
         detail_scroll.pack(side='right', fill='y')
@@ -218,7 +236,7 @@ class App(tk.Tk):
             return
         self.report = None
         self.state_text.set('Not Scanned — Settings Changed; Scan Again')
-        self.status.configure(foreground='#25334a')
+        self.status.configure(foreground=INK)
         self.export_button.configure(state='disabled')
         self.table.delete(*self.table.get_children())
         self.set_details('Scan again to check the current folder or file and keywords.')
@@ -258,7 +276,7 @@ class App(tk.Tk):
         self.table.delete(*self.table.get_children())
         self.set_details('Select a file to inspect match locations and review reasons.')
         self.state_text.set('Scanning — No Safety Result Yet')
-        self.status.configure(foreground='#25334a')
+        self.status.configure(foreground=INK)
         self.lock(True)
         self.export_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
@@ -351,7 +369,7 @@ class App(tk.Tk):
             return
         self.raw_replace(text)
         self.state_text.set('Not Scanned — Text Pasted')
-        self.status.configure(foreground='#25334a')
+        self.status.configure(foreground=INK)
         self.progress_text.set(f'{len(text)} characters pasted. Select Scan Text or MakeItSafe Text.')
 
     def raw_copy(self):
@@ -362,7 +380,7 @@ class App(tk.Tk):
     def raw_clear(self):
         self.raw_replace('')
         self.state_text.set('Not Scanned — Paste Text And Enter Keywords')
-        self.status.configure(foreground='#25334a')
+        self.status.configure(foreground=INK)
         self.set_details(self.view_details['raw'])
 
     def raw_report(self, scan, text):
@@ -455,7 +473,7 @@ class App(tk.Tk):
         self.table.delete(*self.table.get_children())
         self.set_details('Select a file to see what was replaced.')
         self.state_text.set('Processing — Files Are Being Changed')
-        self.status.configure(foreground='#25334a')
+        self.status.configure(foreground=INK)
         self.lock(True)
         self.export_button.configure(state='disabled')
         self.stop_button.configure(state='normal')
